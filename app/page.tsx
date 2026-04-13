@@ -1,6 +1,34 @@
 'use client';
 import { useState, useMemo } from 'react';
 
+// 【嚴謹模式】資料正規化攔截器：無論 API 回傳什麼格式的命名，全數清洗為標準格式
+const normalizeData = (item: any, engine: 'A' | 'B') => {
+  return {
+    // 共用欄位 (涵蓋常見的各種 API 命名習慣)
+    id: item.account || item.username || item.member_id || item.id || Math.random().toString(),
+    platform: item.platform || item.site || item.merchant || '-',
+    username: item.account || item.username || item.user_name || '-',
+    lottery: item.lotteryType || item.lottery || item.lottery_name || '-',
+    // 安全處理 Reason：避免 API 回傳陣列或物件導致 React 崩潰
+    reason: Array.isArray(item.reason) ? item.reason.join(', ') : 
+            (typeof item.reason === 'string' ? item.reason : 
+             (item.abnormal_reason || item.remark || '')),
+             
+    // 引擎 A 數值 (強制轉型為數字，防禦 NaN 崩潰)
+    totalSales: Number(item.totalSales || item.total_sales || item.sales || item.bet_amount || 0),
+    orderCount: Number(item.orderCount || item.order_count || item.orders || item.bet_count || 0),
+    pnl: Number(item.pnl || item.profit || item.net_profit || item.profit_loss || 0),
+    rtp: Number(item.rtp || item.return_to_player || 0),
+    
+    // 引擎 B 數值
+    ratio: Number(item.ratio || item.deposit_sales_ratio || item.充销比 || 0),
+    deposit: Number(item.deposit || item.deposit_amount || item.recharge || 0),
+    treatment: Number(item.treatment || item.bonus || item.activity || 0),
+    betAmount: Number(item.betAmount || item.bet_amount || item.sales || 0),
+    profit: Number(item.profit || item.pnl || item.net_profit || 0)
+  };
+};
+
 export default function AuditDashboard() {
   const [activeEngine, setActiveEngine] = useState<'A' | 'B'>('A');
   const [dateStart, setDateStart] = useState('2026-04-01');
@@ -8,8 +36,10 @@ export default function AuditDashboard() {
   
   const [rawData, setRawData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set());
 
+  // 引擎 A 條件
   const [filtersA, setFiltersA] = useState({
     minSales: { active: true, value: 0.00 },
     maxSales: { active: true, value: 2000.00 },
@@ -20,6 +50,7 @@ export default function AuditDashboard() {
     maxRtp: { active: true, value: 1.000 },
   });
 
+  // 引擎 B 條件
   const [filtersB, setFiltersB] = useState({
     ratioLow: { active: true, value: 2.00 },
     ratioHigh: { active: true, value: 50.00 },
@@ -32,42 +63,67 @@ export default function AuditDashboard() {
     profit: { active: true, value: 100000 },
   });
 
+  // 執行查詢與資料清洗
   const fetchData = async () => {
     setLoading(true);
+    setErrorMsg('');
     setRawData([]);
     try {
       const res = await fetch(`/api/query?engine=${activeEngine}&dateStart=${dateStart}&dateEnd=${dateEnd}`);
       const json = await res.json();
-      setRawData(json.data || json || []); 
-    } catch (error) {
-      alert('查詢失敗，請檢查網路或 API 狀態');
+
+      if (!res.ok || json.error) {
+        throw new Error(json.error || `伺服器連線異常 (${res.status})`);
+      }
+
+      // 安全提取陣列
+      let rawArray = [];
+      if (Array.isArray(json)) rawArray = json;
+      else if (json && Array.isArray(json.data)) rawArray = json.data;
+      else if (json && Array.isArray(json.list)) rawArray = json.list;
+      else throw new Error('API 查詢成功，但回傳的不是有效的資料陣列');
+
+      // 執行嚴謹正規化
+      const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
+      setRawData(cleanData);
+
+    } catch (error: any) {
+      console.error('查詢失敗:', error);
+      setErrorMsg(error.message);
     } finally {
       setLoading(false);
     }
   };
 
+  // 嚴謹過濾邏輯 (基於已清洗的乾淨資料)
   const filteredData = useMemo(() => {
+    if (!Array.isArray(rawData)) return [];
+    
     return rawData.filter(item => {
-      if (activeEngine === 'A') {
-        if (filtersA.minSales.active && item.totalSales < filtersA.minSales.value) return false;
-        if (filtersA.maxSales.active && item.totalSales > filtersA.maxSales.value) return false;
-        if (filtersA.maxOrders.active && item.orderCount > filtersA.maxOrders.value) return false;
-        if (filtersA.minPnl.active && item.pnl < filtersA.minPnl.value) return false;
-        if (filtersA.maxPnl.active && item.pnl > filtersA.maxPnl.value) return false;
-        if (filtersA.minRtp.active && item.rtp < filtersA.minRtp.value) return false;
-        if (filtersA.maxRtp.active && item.rtp > filtersA.maxRtp.value) return false;
-        return true;
-      } else {
-        if (filtersB.ratioLow.active && item.ratio < filtersB.ratioLow.value) return false;
-        if (filtersB.ratioHigh.active && item.ratio > filtersB.ratioHigh.value) return false;
-        if (filtersB.salesMin.active && item.sales < filtersB.salesMin.value) return false;
-        if (filtersB.salesMax.active && item.sales > filtersB.salesMax.value) return false;
-        if (filtersB.depositMin.active && item.deposit < filtersB.depositMin.value) return false;
-        if (filtersB.depositMax.active && item.deposit > filtersB.depositMax.value) return false;
-        if (filtersB.treatment.active && item.treatment < filtersB.treatment.value) return false;
-        if (filtersB.betAmount.active && item.betAmount < filtersB.betAmount.value) return false;
-        if (filtersB.profit.active && item.profit < filtersB.profit.value) return false;
-        return true;
+      try {
+        if (activeEngine === 'A') {
+          if (filtersA.minSales.active && item.totalSales < filtersA.minSales.value) return false;
+          if (filtersA.maxSales.active && item.totalSales > filtersA.maxSales.value) return false;
+          if (filtersA.maxOrders.active && item.orderCount > filtersA.maxOrders.value) return false;
+          if (filtersA.minPnl.active && item.pnl < filtersA.minPnl.value) return false;
+          if (filtersA.maxPnl.active && item.pnl > filtersA.maxPnl.value) return false;
+          if (filtersA.minRtp.active && item.rtp < filtersA.minRtp.value) return false;
+          if (filtersA.maxRtp.active && item.rtp > filtersA.maxRtp.value) return false;
+          return true;
+        } else {
+          if (filtersB.ratioLow.active && item.ratio < filtersB.ratioLow.value) return false;
+          if (filtersB.ratioHigh.active && item.ratio > filtersB.ratioHigh.value) return false;
+          if (filtersB.salesMin.active && item.totalSales < filtersB.salesMin.value) return false;
+          if (filtersB.salesMax.active && item.totalSales > filtersB.salesMax.value) return false;
+          if (filtersB.depositMin.active && item.deposit < filtersB.depositMin.value) return false;
+          if (filtersB.depositMax.active && item.deposit > filtersB.depositMax.value) return false;
+          if (filtersB.treatment.active && item.treatment < filtersB.treatment.value) return false;
+          if (filtersB.betAmount.active && item.betAmount < filtersB.betAmount.value) return false;
+          if (filtersB.profit.active && item.profit < filtersB.profit.value) return false;
+          return true;
+        }
+      } catch (err) {
+        return false; // 過濾發生例外時，安全剃除該筆資料
       }
     });
   }, [rawData, activeEngine, filtersA, filtersB]);
@@ -86,7 +142,7 @@ export default function AuditDashboard() {
           type="checkbox" 
           checked={filterObj.active} 
           onChange={(e) => stateUpdater((prev: any) => ({ ...prev, [stateKey]: { ...prev[stateKey], active: e.target.checked } }))}
-          className="w-4 h-4"
+          className="w-4 h-4 cursor-pointer"
         />
         <label className="text-sm font-medium text-gray-700">{label}</label>
       </div>
@@ -102,6 +158,7 @@ export default function AuditDashboard() {
 
   return (
     <div className="flex h-screen bg-gray-100 text-gray-900">
+      {/* 左側面板 */}
       <div className="w-80 bg-gray-200 border-r border-gray-300 p-4 overflow-y-auto">
         <h2 className="text-xl font-bold mb-6 flex items-center gap-2">🎯 模塊切換</h2>
         <div className="space-y-2 mb-8">
@@ -122,7 +179,7 @@ export default function AuditDashboard() {
            <label className="block text-sm font-medium mb-1">Date End</label>
            <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="w-full border p-1 rounded text-black"/>
            <button onClick={fetchData} disabled={loading} className="mt-3 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50">
-             {loading ? '抓取資料中...' : '執行查詢'}
+             {loading ? '資料擷取中...' : '執行查詢'}
            </button>
         </div>
 
@@ -153,10 +210,20 @@ export default function AuditDashboard() {
         )}
       </div>
 
-      <div className="flex-1 p-8 overflow-y-auto bg-gray-50">
+      {/* 右側表格區 */}
+      <div className="flex-1 p-8 overflow-y-auto bg-gray-50 relative">
         <div className="bg-slate-800 text-white rounded-lg p-6 mb-8 text-center text-3xl font-bold shadow-lg">
           📊 {activeEngine === 'A' ? '用戶彩票分析' : '盈虧排行'}
         </div>
+
+        {/* 嚴謹錯誤訊息提示區 */}
+        {errorMsg && (
+          <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded shadow" role="alert">
+            <p className="font-bold">查詢發生錯誤</p>
+            <p>{errorMsg}</p>
+          </div>
+        )}
+
         <div className="bg-white rounded-lg shadow border border-gray-200 overflow-x-auto">
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-gray-100 border-b">
@@ -186,40 +253,37 @@ export default function AuditDashboard() {
             </thead>
             <tbody>
               {filteredData.length === 0 ? (
-                <tr><td colSpan={10} className="p-8 text-center text-gray-500">尚無符合條件的數據，或請點擊查詢</td></tr>
+                <tr><td colSpan={10} className="p-8 text-center text-gray-500">尚無符合條件的數據，或請點擊執行查詢</td></tr>
               ) : (
-                filteredData.map((item, idx) => {
-                  const id = item.account || item.username || String(idx); 
-                  return (
-                    <tr key={id} className="border-b hover:bg-blue-50 transition-colors">
-                      <td className="p-4">
-                        <input type="checkbox" className="w-4 h-4 cursor-pointer" checked={checkedItems.has(id)} onChange={() => toggleCheck(id)} />
-                      </td>
-                      <td className="p-4 font-medium">{item.platform || '-'}</td>
-                      <td className="p-4 text-blue-600 font-bold">{item.account || item.username || '-'}</td>
-                      <td className="p-4">{item.lotteryType || item.lottery || '-'}</td>
-                      <td className="p-4">
-                        {item.reason && <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">{item.reason}</span>}
-                      </td>
-                      {activeEngine === 'A' ? (
-                        <>
-                          <td className="p-4">{item.totalSales}</td>
-                          <td className="p-4">{item.orderCount}</td>
-                          <td className="p-4 font-bold text-green-600">{item.pnl}</td>
-                          <td className="p-4">{item.rtp}</td>
-                        </>
-                      ) : (
-                        <>
-                          <td className="p-4">{item.sales}</td>
-                          <td className="p-4">{item.deposit}</td>
-                          <td className="p-4">{item.ratio}</td>
-                          <td className="p-4">{item.treatment}</td>
-                          <td className="p-4 font-bold text-green-600">{item.profit || item.pnl}</td>
-                        </>
-                      )}
-                    </tr>
-                  );
-                })
+                filteredData.map((item) => (
+                  <tr key={item.id} className="border-b hover:bg-blue-50 transition-colors">
+                    <td className="p-4">
+                      <input type="checkbox" className="w-4 h-4 cursor-pointer" checked={checkedItems.has(item.id)} onChange={() => toggleCheck(item.id)} />
+                    </td>
+                    <td className="p-4 font-medium">{item.platform}</td>
+                    <td className="p-4 text-blue-600 font-bold">{item.username}</td>
+                    <td className="p-4">{item.lottery}</td>
+                    <td className="p-4">
+                      {item.reason && <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">{item.reason}</span>}
+                    </td>
+                    {activeEngine === 'A' ? (
+                      <>
+                        <td className="p-4">{item.totalSales}</td>
+                        <td className="p-4">{item.orderCount}</td>
+                        <td className={`p-4 font-bold ${item.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{item.pnl}</td>
+                        <td className="p-4">{item.rtp}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="p-4">{item.totalSales}</td>
+                        <td className="p-4">{item.deposit}</td>
+                        <td className="p-4">{item.ratio}</td>
+                        <td className="p-4">{item.treatment}</td>
+                        <td className={`p-4 font-bold ${item.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{item.profit}</td>
+                      </>
+                    )}
+                  </tr>
+                ))
               )}
             </tbody>
           </table>

@@ -10,16 +10,16 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
     username: item.account || item.username || item.user_name || '-',
     lottery: item.lotteryType || item.lottery || item.lottery_name || '-',
     // 安全處理 Reason：避免 API 回傳陣列或物件導致 React 崩潰
-    reason: Array.isArray(item.reason) ? item.reason.join(', ') : 
-            (typeof item.reason === 'string' ? item.reason : 
+    reason: Array.isArray(item.reason) ? item.reason.join(', ') :
+            (typeof item.reason === 'string' ? item.reason :
              (item.abnormal_reason || item.remark || '')),
-             
+
     // 引擎 A 數值 (強制轉型為數字，防禦 NaN 崩潰)
     totalSales: Number(item.totalSales || item.total_sales || item.sales || item.bet_amount || 0),
     orderCount: Number(item.orderCount || item.order_count || item.orders || item.bet_count || 0),
     pnl: Number(item.pnl || item.profit || item.net_profit || item.profit_loss || 0),
     rtp: Number(item.rtp || item.return_to_player || 0),
-    
+
     // 引擎 B 數值
     ratio: Number(item.ratio || item.deposit_sales_ratio || item.充销比 || 0),
     deposit: Number(item.deposit || item.deposit_amount || item.recharge || 0),
@@ -29,11 +29,34 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
   };
 };
 
+// FilterInput 放在元件外部，避免每次 render 被重新建立（修正輸入框失焦問題）
+const FilterInput = ({ label, filterObj, stateUpdater, stateKey }: any) => (
+  <div className="mb-4">
+    <div className="flex items-center gap-2 mb-1">
+      <input
+        type="checkbox"
+        checked={filterObj.active}
+        onChange={(e) => stateUpdater((prev: any) => ({ ...prev, [stateKey]: { ...prev[stateKey], active: e.target.checked } }))}
+        className="w-4 h-4 cursor-pointer"
+      />
+      <label className="text-sm font-medium text-gray-700">{label}</label>
+    </div>
+    <input
+      type="number"
+      disabled={!filterObj.active}
+      value={filterObj.value}
+      onChange={(e) => stateUpdater((prev: any) => ({ ...prev, [stateKey]: { ...prev[stateKey], value: Number(e.target.value) } }))}
+      className="w-full p-2 border rounded bg-gray-800 text-white disabled:opacity-50"
+    />
+  </div>
+);
+
 export default function AuditDashboard() {
   const [activeEngine, setActiveEngine] = useState<'A' | 'B'>('A');
-  const [dateStart, setDateStart] = useState('ALL');
-  const [dateEnd, setDateEnd] = useState('ALL');
-  
+  const [dateStart, setDateStart] = useState('2026-04-01');
+  const [dateEnd, setDateEnd] = useState('2026-04-08');
+  const [platform, setPlatform] = useState('ALL'); // 新增：平台代碼（必填，預設 ALL）
+
   const [rawData, setRawData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -69,7 +92,12 @@ export default function AuditDashboard() {
     setErrorMsg('');
     setRawData([]);
     try {
-      const res = await fetch(`/api/query?engine=${activeEngine}&dateStart=${dateStart}&dateEnd=${dateEnd}`);
+      const res = await fetch(
+        `/api/query?engine=${activeEngine}` +
+        `&dateStart=${encodeURIComponent(dateStart)}` +
+        `&dateEnd=${encodeURIComponent(dateEnd)}` +
+        `&platform=${encodeURIComponent(platform || 'ALL')}`
+      );
       const json = await res.json();
 
       if (!res.ok || json.error) {
@@ -84,7 +112,7 @@ export default function AuditDashboard() {
       else throw new Error('API 查詢成功，但回傳的不是有效的資料陣列');
 
       // 執行嚴謹正規化
-const cleanData = rawArray.map((item: any) => normalizeData(item, activeEngine));
+      const cleanData = rawArray.map((item: any) => normalizeData(item, activeEngine));
       setRawData(cleanData);
     } catch (error: any) {
       console.error('查詢失敗:', error);
@@ -97,7 +125,7 @@ const cleanData = rawArray.map((item: any) => normalizeData(item, activeEngine))
   // 嚴謹過濾邏輯 (基於已清洗的乾淨資料)
   const filteredData = useMemo(() => {
     if (!Array.isArray(rawData)) return [];
-    
+
     return rawData.filter(item => {
       try {
         if (activeEngine === 'A') {
@@ -121,7 +149,7 @@ const cleanData = rawArray.map((item: any) => normalizeData(item, activeEngine))
           if (filtersB.profit.active && item.profit < filtersB.profit.value) return false;
           return true;
         }
-      } catch (err) {
+      } catch {
         return false; // 過濾發生例外時，安全剃除該筆資料
       }
     });
@@ -133,27 +161,6 @@ const cleanData = rawArray.map((item: any) => normalizeData(item, activeEngine))
     else newChecked.add(id);
     setCheckedItems(newChecked);
   };
-
-  const FilterInput = ({ label, filterObj, stateUpdater, stateKey }: any) => (
-    <div className="mb-4">
-      <div className="flex items-center gap-2 mb-1">
-        <input 
-          type="checkbox" 
-          checked={filterObj.active} 
-          onChange={(e) => stateUpdater((prev: any) => ({ ...prev, [stateKey]: { ...prev[stateKey], active: e.target.checked } }))}
-          className="w-4 h-4 cursor-pointer"
-        />
-        <label className="text-sm font-medium text-gray-700">{label}</label>
-      </div>
-      <input 
-        type="number" 
-        disabled={!filterObj.active}
-        value={filterObj.value}
-        onChange={(e) => stateUpdater((prev: any) => ({ ...prev, [stateKey]: { ...prev[stateKey], value: Number(e.target.value) } }))}
-        className="w-full p-2 border rounded bg-gray-800 text-white disabled:opacity-50"
-      />
-    </div>
-  );
 
   return (
     <div className="flex h-screen bg-gray-100 text-gray-900">
@@ -173,6 +180,14 @@ const cleanData = rawArray.map((item: any) => normalizeData(item, activeEngine))
 
         <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">⚙️ 審計維度勾選</h3>
         <div className="mb-4 p-3 bg-white rounded shadow-sm border border-gray-200">
+           <label className="block text-sm font-medium mb-1">平台 (多個用逗號, 或 ALL)</label>
+           <input
+             type="text"
+             value={platform}
+             onChange={e => setPlatform(e.target.value)}
+             placeholder="ALL"
+             className="w-full border p-1 rounded mb-2 text-black"
+           />
            <label className="block text-sm font-medium mb-1">Date Start</label>
            <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="w-full border p-1 rounded mb-2 text-black"/>
            <label className="block text-sm font-medium mb-1">Date End</label>

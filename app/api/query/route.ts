@@ -36,10 +36,26 @@ export async function GET(request: Request) {
       },
     });
 
-    if (!response.ok) throw new Error(`API 請求失敗: ${response.status}`);
-    
-    const data = await response.json();
-    return NextResponse.json(data);
+    // 【嚴謹模式除錯核心】：不直接轉 JSON，強制先讀取原始文字！
+    const rawText = await response.text();
+
+    if (!response.ok) {
+      throw new Error(`Railway 回報錯誤 (HTTP ${response.status})。內容: ${rawText.substring(0, 100)}`);
+    }
+
+    if (!rawText || rawText.trim() === '') {
+      throw new Error(`Railway (引擎 ${engine}) 連線成功，但回傳了「完全空白」的內容，沒有數據。`);
+    }
+
+    try {
+      // 嘗試把文字轉成 JSON
+      const data = JSON.parse(rawText);
+      return NextResponse.json(data);
+    } catch (parseError) {
+      // 如果轉 JSON 失敗，就把 Railway 吐出的怪東西直接印在畫面上
+      throw new Error(`Railway (引擎 ${engine}) 回傳的不是有效 JSON。內容開頭為: ${rawText.substring(0, 80)}...`);
+    }
+
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

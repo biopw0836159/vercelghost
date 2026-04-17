@@ -31,8 +31,8 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
 
 export default function AuditDashboard() {
   const [activeEngine, setActiveEngine] = useState<'A' | 'B'>('A');
-  const [dateStart, setDateStart] = useState('2026-04-01');
-  const [dateEnd, setDateEnd] = useState('2026-04-08');
+  const [dateStart, setDateStart] = useState('ALL');
+  const [dateEnd, setDateEnd] = useState('ALL');
   
   const [rawData, setRawData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

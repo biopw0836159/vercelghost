@@ -1,68 +1,67 @@
 import { NextResponse } from 'next/server';
 
+const ALL_PLATFORMS = ["XH", "LS", "OL", "XY", "SH", "YS", "JY", "HS", "FB", "SY", "LY", "MT", "JD", "ND", "YD"];
+
+const ENGINE_URLS: Record<string, string> = {
+  A: 'https://stats-crawler.up.railway.app/api/query-user-lottery-analysis',
+  B: 'https://stats-crawler.up.railway.app/api/query-member-income',
+};
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const engine = searchParams.get('engine'); // 'A' 或 'B'
+  const engine = searchParams.get('engine') || 'A';
   const dateStart = searchParams.get('dateStart');
   const dateEnd = searchParams.get('dateEnd');
-  const platform = searchParams.get('platform') || 'ALL'; // 必填，預設 ALL
+  const platform = searchParams.get('platform') || 'ALL';
 
   if (!dateStart || !dateEnd) {
     return NextResponse.json({ error: '必須提供開始與結束日期' }, { status: 400 });
   }
 
-  // 根據引擎選擇對應的 API URL
-  const TARGET_URL = engine === 'A'
-    ? process.env.API_URL_ENGINE_A
-    : process.env.API_URL_ENGINE_B;
+  const TARGET_URL = ENGINE_URLS[engine] || ENGINE_URLS['A'];
+  const JWT_TOKEN = process.env.TARGET_JWT_TOKEN;
 
-  const API_KEY = process.env.TARGET_API_KEY;
-
-  if (!TARGET_URL || !API_KEY) {
-    return NextResponse.json({ error: '伺服器 API 配置缺失' }, { status: 500 });
+  if (!JWT_TOKEN) {
+    return NextResponse.json({ error: '伺服器 JWT Token 未設定' }, { status: 500 });
   }
 
-  // 組合目標 URL 與參數（platform / dateStart / dateEnd 皆為必填）
-  const targetWithParams = new URL(TARGET_URL);
-  targetWithParams.searchParams.append('platform', platform);
-  targetWithParams.searchParams.append('dateStart', dateStart);
-  targetWithParams.searchParams.append('dateEnd', dateEnd);
+  const platforms = platform === 'ALL' ? ALL_PLATFORMS : [platform];
 
-  // 方便在 Vercel Function Logs 排查
-  console.log('[query] engine:', engine);
-  console.log('[query] target URL:', targetWithParams.toString());
+  const body = {
+    account: '',
+    byPlayType: false,
+    dateStart,
+    dateEnd,
+    lottery: '',
+    noAccountMode: true,
+    platforms,
+  };
 
   try {
-    const response = await fetch(targetWithParams.toString(), {
-      method: 'GET',
+    const response = await fetch(TARGET_URL, {
+      method: 'POST',
       headers: {
-        'Authorization': `Bearer ${API_KEY.replace(/[<>]/g, '')}`,
+        'Authorization': `Bearer ${JWT_TOKEN}`,
+        'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'Cache-Control': 'no-store',
       },
+      body: JSON.stringify(body),
     });
 
-    // 【嚴謹模式除錯核心】：不直接轉 JSON，強制先讀取原始文字
     const rawText = await response.text();
-
-    console.log('[query] status:', response.status);
-    console.log('[query] body length:', rawText.length);
+    const contentType = response.headers.get('content-type') || '';
 
     if (!response.ok) {
-      throw new Error(`Railway 回報錯誤 (HTTP ${response.status})。內容: ${rawText.substring(0, 100)}`);
+      throw new Error(`後端回應錯誤 HTTP ${response.status}，內容：${rawText.substring(0, 200)}`);
     }
 
-    // 空 body 視為「零筆資料」而不是錯誤
-    if (!rawText || rawText.trim() === '') {
-      return NextResponse.json([]);
+    if (!contentType.includes('application/json')) {
+      throw new Error(`後端回傳非 JSON (${response.status})，內容：${rawText.substring(0, 200)}`);
     }
 
-    try {
-      const data = JSON.parse(rawText);
-      return NextResponse.json(data);
-    } catch {
-      throw new Error(`Railway (引擎 ${engine}) 回傳的不是有效 JSON。內容開頭為: ${rawText.substring(0, 80)}...`);
-    }
+    const data = JSON.parse(rawText);
+    const rows = Array.isArray(data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+    return NextResponse.json(rows);
 
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

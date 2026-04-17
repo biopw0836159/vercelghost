@@ -84,9 +84,8 @@ export default function AuditDashboard() {
       else throw new Error('API 查詢成功，但回傳的不是有效的資料陣列');
 
       // 執行嚴謹正規化
-      const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
+const cleanData = rawArray.map((item: any) => normalizeData(item, activeEngine));
       setRawData(cleanData);
-
     } catch (error: any) {
       console.error('查詢失敗:', error);
       setErrorMsg(error.message);

@@ -22,6 +22,11 @@ function isTokenExpired(token: string): boolean {
 }
 
 const normalizeData = (item: any, engine: 'A' | 'B') => {
+  const deposit = Number(item['充值'] || item.deposit || item.deposit_amount || item.recharge || 0);
+  const totalSales = Number(item['投注'] || item.totalSales || item.total_sales || item.sales || item.bet_amount || 0);
+  const directRatio = Number(item['充销比'] || item['充銷比'] || item.deposit_sales_ratio || item.ratio || 0);
+  const ratio = directRatio > 0 ? directRatio : (totalSales > 0 ? Number((deposit / totalSales).toFixed(2)) : 0);
+
   return {
     id: item.account || item.username || item['用户名'] || item.member_id || item.id || Math.random().toString(),
     platform: item['平台'] || item.platform || item.site || item.merchant || '-',
@@ -30,12 +35,12 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
     reason: Array.isArray(item.reason) ? item.reason.join(', ') :
             (typeof item.reason === 'string' ? item.reason :
              (item.abnormal_reason || item.remark || '')),
-    totalSales: Number(item['投注'] || item.totalSales || item.total_sales || item.sales || item.bet_amount || 0),
+    totalSales,
     orderCount: Number(item.orderCount || item.order_count || item.orders || item.bet_count || 0),
     pnl: Number(item['盈亏'] || item.pnl || item.profit || item.net_profit || item.profit_loss || 0),
     rtp: Number(item.rtp || item.return_to_player || 0),
-    deposit: Number(item['充值'] || item.deposit || item.deposit_amount || item.recharge || 0),
-    ratio: Number(item['返点'] || item.ratio || item.deposit_sales_ratio || 0),
+    deposit,
+    ratio,
     treatment: Number(item['总返点'] || item['總返點'] || item.rebate || item.total_rebate || item.treatment || 0),
     betAmount: Number(item['投注'] || item.betAmount || item.bet_amount || item.sales || 0),
     profit: Number(item['盈亏'] || item.profit || item.pnl || item.net_profit || 0),

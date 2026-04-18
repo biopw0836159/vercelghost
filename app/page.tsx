@@ -253,6 +253,8 @@ export default function AuditDashboard() {
     setRawData([]);
     setRawSample(null);
     setShowRawSample(false);
+    setCheckedItems(new Set());
+    setSortBy('');
     setHasQueried(true);
     try {
       const platforms = platform === 'ALL' ? ALL_PLATFORMS : [platform];

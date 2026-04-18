@@ -182,7 +182,7 @@ export default function AuditDashboard() {
           if (filtersB.rule3.active && item.treatment >= filtersB.rule3.treatmentMin) matched.push('高返點');
           if (filtersB.rule4.active && item.deposit >= filtersB.rule4.depositMin) matched.push('大額充值');
           if (filtersB.rule5.active && item.profit >= filtersB.rule5.profitMin) matched.push('大額盈利');
-          if (filtersB.rule6.active && item.deposit === 0 && item.totalSales >= filtersB.rule6.salesMin) matched.push('無充值銷量高');
+          if (filtersB.rule6.active && item.deposit === 0 && item.totalSales > 0 && filtersB.rule6.salesMin > 0 && item.totalSales >= filtersB.rule6.salesMin) matched.push('無充值銷量高');
         } catch {}
         return { ...item, matchedReasons: matched };
       })
@@ -378,6 +378,23 @@ export default function AuditDashboard() {
           <div className="bg-yellow-50 border border-yellow-300 rounded p-3 mb-4 text-sm font-mono">
             <div>🔸 API 回傳原始筆數：<b>{rawData.length}</b></div>
             <div>🔸 通過過濾條件筆數：<b>{filteredData.length}</b></div>
+            {activeEngine === 'B' && (() => {
+              const active: string[] = [];
+              if (filtersB.rule1.active) active.push(`①充銷比高: 比值≥${filtersB.rule1.ratioHigh}, 銷量≥${filtersB.rule1.salesMin}`);
+              if (filtersB.rule2.active) active.push(`②充銷比低: 比值≤${filtersB.rule2.ratioLow}, 銷量≥${filtersB.rule2.salesMin}`);
+              if (filtersB.rule3.active) active.push(`③高返點: 返點≥${filtersB.rule3.treatmentMin}`);
+              if (filtersB.rule4.active) active.push(`④大額充值: 充值≥${filtersB.rule4.depositMin}`);
+              if (filtersB.rule5.active) active.push(`⑤大額盈利: 盈虧≥${filtersB.rule5.profitMin}`);
+              if (filtersB.rule6.active) active.push(`⑥無充值銷量高: 銷量≥${filtersB.rule6.salesMin}`);
+              return active.length > 0 ? (
+                <div className="mt-1 text-xs text-gray-700">
+                  <span className="font-bold">🔧 目前啟用規則：</span>
+                  <ul className="list-disc ml-5 mt-1">
+                    {active.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </div>
+              ) : null;
+            })()}
             {rawData.length > 0 && filteredData.length === 0 && (
               <div className="text-red-600 font-bold mt-2">⚠️ API 有資料，但被過濾條件全部剃除！請放寬左側規則條件。</div>
             )}
@@ -443,9 +460,9 @@ export default function AuditDashboard() {
           </div>
         )}
 
-        <div className="bg-white rounded-lg shadow border border-gray-200 overflow-x-auto">
+        <div className="bg-white rounded-lg shadow border border-gray-200">
           <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-gray-100 border-b">
+            <thead className="bg-gray-100 border-b sticky top-0 z-20 shadow-sm">
               <tr>
                 <th className="p-4 font-bold text-gray-600">核查</th>
                 <th className="p-4 font-bold text-gray-600">平台</th>

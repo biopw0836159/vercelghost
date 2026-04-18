@@ -25,7 +25,7 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
   const deposit = Number(item['充值'] || item.deposit || item.deposit_amount || item.recharge || 0);
   const totalSales = Number(item['投注'] || item.totalSales || item.total_sales || item.sales || item.bet_amount || 0);
   const directRatio = Number(item['充销比'] || item['充銷比'] || item.deposit_sales_ratio || item.ratio || 0);
-  const ratio = directRatio > 0 ? directRatio : (totalSales > 0 ? Number((deposit / totalSales).toFixed(2)) : 0);
+  const ratio = directRatio > 0 ? directRatio : (deposit > 0 ? Number((totalSales / deposit).toFixed(2)) : 0);
 
   return {
     id: item.account || item.username || item['用户名'] || item.member_id || item.id || Math.random().toString(),
@@ -302,9 +302,9 @@ export default function AuditDashboard() {
         {activeEngine === 'B' && (
           <div>
             <div className="text-xs text-gray-500 mb-2 px-1">勾選要啟用的規則，規則之間為「或」關係</div>
-            <RuleCard rule={filtersB.rule1} ruleKey="rule1" title="① 充銷比(高) + 銷量" desc="比值 ≥ 閾值 且 銷量 ≥ 閾值"
+            <RuleCard rule={filtersB.rule1} ruleKey="rule1" title="① 充銷比(高) + 銷量" desc="充值銷量比 ≥ 閾值 且 銷量 ≥ 閾值"
               fields={[{ field: 'ratioHigh', label: '充銷比(高) ≥' }, { field: 'salesMin', label: '銷量 ≥' }]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule2} ruleKey="rule2" title="② 充銷比(低) + 銷量" desc="比值 ≤ 閾值 且 銷量 ≥ 閾值"
+            <RuleCard rule={filtersB.rule2} ruleKey="rule2" title="② 充銷比(低) + 銷量" desc="充值銷量比 ≤ 閾值 且 銷量 ≥ 閾值"
               fields={[{ field: 'ratioLow', label: '充銷比(低) ≤' }, { field: 'salesMin', label: '銷量 ≥' }]} stateUpdater={setFiltersB} />
             <RuleCard rule={filtersB.rule3} ruleKey="rule3" title="③ 返點" desc="返點 ≥ 閾值"
               fields={[{ field: 'treatmentMin', label: '返點 ≥' }]} stateUpdater={setFiltersB} />
@@ -348,12 +348,12 @@ export default function AuditDashboard() {
                 <th className="p-4 font-bold text-gray-600">核查</th>
                 <th className="p-4 font-bold text-gray-600">平台</th>
                 <th className="p-4 font-bold text-gray-600">用戶名</th>
-                <th className="p-4 font-bold text-gray-600">彩種</th>
+                {activeEngine === 'A' && <th className="p-4 font-bold text-gray-600">彩種</th>}
                 <th className="p-4 font-bold text-gray-600">原因</th>
                 {activeEngine === 'A' ? (
                   <><th className="p-4 font-bold text-gray-600">總銷量</th><th className="p-4 font-bold text-gray-600">單數</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
                 ) : (
-                  <><th className="p-4 font-bold text-gray-600">銷量</th><th className="p-4 font-bold text-gray-600">充值</th><th className="p-4 font-bold text-gray-600">比值</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th></>
+                  <><th className="p-4 font-bold text-gray-600">銷量</th><th className="p-4 font-bold text-gray-600">充值</th><th className="p-4 font-bold text-gray-600">充值銷量比</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th></>
                 )}
               </tr>
             </thead>
@@ -366,7 +366,7 @@ export default function AuditDashboard() {
                     <td className="p-4"><input type="checkbox" className="w-4 h-4 cursor-pointer" checked={checkedItems.has(item.id)} onChange={() => toggleCheck(item.id)} /></td>
                     <td className="p-4 font-medium">{item.platform}</td>
                     <td className="p-4 text-blue-600 font-bold">{item.username}</td>
-                    <td className="p-4">{item.lottery}</td>
+                    {activeEngine === 'A' && <td className="p-4">{item.lottery}</td>}
                     <td className="p-4">
                       {activeEngine === 'B' && item.matchedReasons?.length > 0 ? (
                         <div className="flex flex-wrap gap-1">

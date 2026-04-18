@@ -36,7 +36,7 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
     rtp: Number(item.rtp || item.return_to_player || 0),
     deposit: Number(item['充值'] || item.deposit || item.deposit_amount || item.recharge || 0),
     ratio: Number(item['返点'] || item.ratio || item.deposit_sales_ratio || 0),
-    treatment: Number(item['派奖'] || item.treatment || item.bonus || item.activity || 0),
+    treatment: Number(item['总返点'] || item['總返點'] || item.rebate || item.total_rebate || item.treatment || 0),
     betAmount: Number(item['投注'] || item.betAmount || item.bet_amount || item.sales || 0),
     profit: Number(item['盈亏'] || item.profit || item.pnl || item.net_profit || 0),
   };

@@ -135,7 +135,7 @@ export default function AuditDashboard() {
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set());
   const [hasQueried, setHasQueried] = useState(false);
 
-  const [filtersA, setFiltersA] = useState({
+  const defaultFiltersA = {
     minSales: { active: true, value: 0.00 },
     maxSales: { active: true, value: 2000.00 },
     maxOrders: { active: true, value: 12 },
@@ -143,16 +143,24 @@ export default function AuditDashboard() {
     maxPnl: { active: true, value: 1000000.00 },
     minRtp: { active: true, value: 0.995 },
     maxRtp: { active: true, value: 1.000 },
-  });
+  };
 
-  const [filtersB, setFiltersB] = useState({
+  const defaultFiltersB = {
     rule1: { active: false, ratioHigh: 50, salesMin: 30000 },
     rule2: { active: false, ratioLow: 2, salesMin: 30000 },
     rule3: { active: false, treatmentMin: 50000 },
     rule4: { active: false, depositMin: 100000 },
     rule5: { active: false, profitMin: 100000 },
     rule6: { active: false, salesMin: 5000 },
-  });
+  };
+
+  // 側邊欄當下勾選(草稿) - 勾選時即時更新
+  const [filtersA, setFiltersA] = useState(defaultFiltersA);
+  const [filtersB, setFiltersB] = useState(defaultFiltersB);
+
+  // 實際套用到表格的條件 - 只在按「執行查詢」時才同步
+  const [appliedFiltersA, setAppliedFiltersA] = useState(defaultFiltersA);
+  const [appliedFiltersB, setAppliedFiltersB] = useState(defaultFiltersB);
 
   const [sortBy, setSortBy] = useState<string>('');
 
@@ -161,28 +169,28 @@ export default function AuditDashboard() {
     if (activeEngine === 'A') {
       return rawData.filter(item => {
         try {
-          if (filtersA.minSales.active && item.totalSales < filtersA.minSales.value) return false;
-          if (filtersA.maxSales.active && item.totalSales > filtersA.maxSales.value) return false;
-          if (filtersA.maxOrders.active && item.orderCount > filtersA.maxOrders.value) return false;
-          if (filtersA.minPnl.active && item.pnl < filtersA.minPnl.value) return false;
-          if (filtersA.maxPnl.active && item.pnl > filtersA.maxPnl.value) return false;
-          if (filtersA.minRtp.active && item.rtp < filtersA.minRtp.value) return false;
-          if (filtersA.maxRtp.active && item.rtp > filtersA.maxRtp.value) return false;
+          if (appliedFiltersA.minSales.active && item.totalSales < appliedFiltersA.minSales.value) return false;
+          if (appliedFiltersA.maxSales.active && item.totalSales > appliedFiltersA.maxSales.value) return false;
+          if (appliedFiltersA.maxOrders.active && item.orderCount > appliedFiltersA.maxOrders.value) return false;
+          if (appliedFiltersA.minPnl.active && item.pnl < appliedFiltersA.minPnl.value) return false;
+          if (appliedFiltersA.maxPnl.active && item.pnl > appliedFiltersA.maxPnl.value) return false;
+          if (appliedFiltersA.minRtp.active && item.rtp < appliedFiltersA.minRtp.value) return false;
+          if (appliedFiltersA.maxRtp.active && item.rtp > appliedFiltersA.maxRtp.value) return false;
           return true;
         } catch { return false; }
       });
     }
-    const anyRuleActive = Object.values(filtersB).some((r: any) => r.active);
+    const anyRuleActive = Object.values(appliedFiltersB).some((r: any) => r.active);
     const result = rawData
       .map((item: any) => {
         const matched: string[] = [];
         try {
-          if (filtersB.rule1.active && item.deposit > 0 && item.ratio >= filtersB.rule1.ratioHigh && item.totalSales >= filtersB.rule1.salesMin) matched.push('充銷比高');
-          if (filtersB.rule2.active && item.deposit > 0 && item.ratio <= filtersB.rule2.ratioLow && item.totalSales >= filtersB.rule2.salesMin) matched.push('充銷比低');
-          if (filtersB.rule3.active && item.treatment >= filtersB.rule3.treatmentMin) matched.push('高返點');
-          if (filtersB.rule4.active && item.deposit >= filtersB.rule4.depositMin) matched.push('大額充值');
-          if (filtersB.rule5.active && item.profit >= filtersB.rule5.profitMin) matched.push('大額盈利');
-          if (filtersB.rule6.active && item.deposit === 0 && item.totalSales > 0 && filtersB.rule6.salesMin > 0 && item.totalSales >= filtersB.rule6.salesMin) matched.push('無充值銷量高');
+          if (appliedFiltersB.rule1.active && item.deposit > 0 && item.ratio >= appliedFiltersB.rule1.ratioHigh && item.totalSales >= appliedFiltersB.rule1.salesMin) matched.push('充銷比高');
+          if (appliedFiltersB.rule2.active && item.deposit > 0 && item.ratio <= appliedFiltersB.rule2.ratioLow && item.totalSales >= appliedFiltersB.rule2.salesMin) matched.push('充銷比低');
+          if (appliedFiltersB.rule3.active && item.treatment >= appliedFiltersB.rule3.treatmentMin) matched.push('高返點');
+          if (appliedFiltersB.rule4.active && item.deposit >= appliedFiltersB.rule4.depositMin) matched.push('大額充值');
+          if (appliedFiltersB.rule5.active && item.profit >= appliedFiltersB.rule5.profitMin) matched.push('大額盈利');
+          if (appliedFiltersB.rule6.active && item.deposit === 0 && item.totalSales > 0 && appliedFiltersB.rule6.salesMin > 0 && item.totalSales >= appliedFiltersB.rule6.salesMin) matched.push('無充值銷量高');
         } catch {}
         return { ...item, matchedReasons: matched };
       })
@@ -202,7 +210,7 @@ export default function AuditDashboard() {
       }
     }
     return result;
-  }, [rawData, activeEngine, filtersA, filtersB, sortBy]);
+  }, [rawData, activeEngine, appliedFiltersA, appliedFiltersB, sortBy]);
 
   useEffect(() => {
     const saved = sessionStorage.getItem(TOKEN_KEY);
@@ -256,6 +264,9 @@ export default function AuditDashboard() {
     setCheckedItems(new Set());
     setSortBy('');
     setHasQueried(true);
+    // 把當下側邊欄的條件「凍結」成套用版本，這之後再勾選也不會影響表格
+    setAppliedFiltersA(filtersA);
+    setAppliedFiltersB(filtersB);
     try {
       const platforms = platform === 'ALL' ? ALL_PLATFORMS : [platform];
       const body = {
@@ -332,6 +343,14 @@ export default function AuditDashboard() {
           <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="w-full border p-1 rounded mb-2 text-black" />
           <label className="block text-sm font-medium mb-1">Date End</label>
           <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="w-full border p-1 rounded text-black" />
+          {hasQueried && (activeEngine === 'A'
+            ? JSON.stringify(filtersA) !== JSON.stringify(appliedFiltersA)
+            : JSON.stringify(filtersB) !== JSON.stringify(appliedFiltersB)
+          ) && (
+            <div className="mt-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded p-1.5 font-medium">
+              ⏳ 條件有變更，按「執行查詢」才會套用
+            </div>
+          )}
           <button onClick={fetchData} disabled={loading} className="mt-3 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50">
             {loading ? '資料擷取中...' : '執行查詢'}
           </button>
@@ -382,15 +401,15 @@ export default function AuditDashboard() {
             <div>🔸 通過過濾條件筆數：<b>{filteredData.length}</b></div>
             {activeEngine === 'B' && (() => {
               const active: string[] = [];
-              if (filtersB.rule1.active) active.push(`①充銷比高: 比值≥${filtersB.rule1.ratioHigh}, 銷量≥${filtersB.rule1.salesMin}`);
-              if (filtersB.rule2.active) active.push(`②充銷比低: 比值≤${filtersB.rule2.ratioLow}, 銷量≥${filtersB.rule2.salesMin}`);
-              if (filtersB.rule3.active) active.push(`③高返點: 返點≥${filtersB.rule3.treatmentMin}`);
-              if (filtersB.rule4.active) active.push(`④大額充值: 充值≥${filtersB.rule4.depositMin}`);
-              if (filtersB.rule5.active) active.push(`⑤大額盈利: 盈虧≥${filtersB.rule5.profitMin}`);
-              if (filtersB.rule6.active) active.push(`⑥無充值銷量高: 銷量≥${filtersB.rule6.salesMin}`);
+              if (appliedFiltersB.rule1.active) active.push(`①充銷比高: 比值≥${appliedFiltersB.rule1.ratioHigh}, 銷量≥${appliedFiltersB.rule1.salesMin}`);
+              if (appliedFiltersB.rule2.active) active.push(`②充銷比低: 比值≤${appliedFiltersB.rule2.ratioLow}, 銷量≥${appliedFiltersB.rule2.salesMin}`);
+              if (appliedFiltersB.rule3.active) active.push(`③高返點: 返點≥${appliedFiltersB.rule3.treatmentMin}`);
+              if (appliedFiltersB.rule4.active) active.push(`④大額充值: 充值≥${appliedFiltersB.rule4.depositMin}`);
+              if (appliedFiltersB.rule5.active) active.push(`⑤大額盈利: 盈虧≥${appliedFiltersB.rule5.profitMin}`);
+              if (appliedFiltersB.rule6.active) active.push(`⑥無充值銷量高: 銷量≥${appliedFiltersB.rule6.salesMin}`);
               return active.length > 0 ? (
                 <div className="mt-1 text-xs text-gray-700">
-                  <span className="font-bold">🔧 目前啟用規則：</span>
+                  <span className="font-bold">🔧 本次查詢套用規則：</span>
                   <ul className="list-disc ml-5 mt-1">
                     {active.map((s, i) => <li key={i}>{s}</li>)}
                   </ul>

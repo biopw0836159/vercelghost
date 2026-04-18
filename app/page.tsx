@@ -146,12 +146,11 @@ export default function AuditDashboard() {
   };
 
   const defaultFiltersB = {
-    rule1: { active: false, ratioHigh: 50, salesMin: 30000 },
-    rule2: { active: false, ratioLow: 2, salesMin: 30000 },
+    rule1: { active: false, ratioHigh: 50, salesMin: 30000, salesMax: 99999999 },
+    rule2: { active: false, ratioLow: 2, depositMin: 1000, depositMax: 2000 },
     rule3: { active: false, treatmentMin: 50000 },
-    rule4: { active: false, depositMin: 100000 },
-    rule5: { active: false, profitMin: 100000 },
-    rule6: { active: false, salesMin: 5000 },
+    rule4: { active: false, profitMin: 100000 },       // 原 rule5 (大額盈利)
+    rule5: { active: false, salesMin: 5000 },          // 原 rule6 (無充值銷量高)
   };
 
   // 側邊欄當下勾選(草稿) - 勾選時即時更新
@@ -195,12 +194,24 @@ export default function AuditDashboard() {
       .map((item: any) => {
         const matched: string[] = [];
         try {
-          if (appliedFiltersB.rule1.active && item.deposit > 0 && item.ratio >= appliedFiltersB.rule1.ratioHigh && item.totalSales >= appliedFiltersB.rule1.salesMin) matched.push('充銷比高');
-          if (appliedFiltersB.rule2.active && item.deposit > 0 && item.ratio <= appliedFiltersB.rule2.ratioLow && item.totalSales >= appliedFiltersB.rule2.salesMin) matched.push('充銷比低');
+          // ① 充銷比高 + 銷量區間：比值≥閾值 且 銷量在[min,max]區間內
+          if (appliedFiltersB.rule1.active && item.deposit > 0
+              && item.ratio >= appliedFiltersB.rule1.ratioHigh
+              && item.totalSales >= appliedFiltersB.rule1.salesMin
+              && item.totalSales <= appliedFiltersB.rule1.salesMax) matched.push('充銷比高');
+          // ② 充銷比低 + 充值區間：比值≤閾值 且 充值在[min,max]區間內
+          if (appliedFiltersB.rule2.active && item.deposit > 0
+              && item.ratio <= appliedFiltersB.rule2.ratioLow
+              && item.deposit >= appliedFiltersB.rule2.depositMin
+              && item.deposit <= appliedFiltersB.rule2.depositMax) matched.push('充銷比低');
+          // ③ 高返點
           if (appliedFiltersB.rule3.active && item.treatment >= appliedFiltersB.rule3.treatmentMin) matched.push('高返點');
-          if (appliedFiltersB.rule4.active && item.deposit >= appliedFiltersB.rule4.depositMin) matched.push('大額充值');
-          if (appliedFiltersB.rule5.active && item.profit >= appliedFiltersB.rule5.profitMin) matched.push('大額盈利');
-          if (appliedFiltersB.rule6.active && item.deposit === 0 && item.totalSales > 0 && appliedFiltersB.rule6.salesMin > 0 && item.totalSales >= appliedFiltersB.rule6.salesMin) matched.push('無充值銷量高');
+          // ④ 大額盈利 (原 rule5)
+          if (appliedFiltersB.rule4.active && item.profit >= appliedFiltersB.rule4.profitMin) matched.push('大額盈利');
+          // ⑤ 無充值銷量高 (原 rule6)
+          if (appliedFiltersB.rule5.active && item.deposit === 0 && item.totalSales > 0
+              && appliedFiltersB.rule5.salesMin > 0
+              && item.totalSales >= appliedFiltersB.rule5.salesMin) matched.push('無充值銷量高');
         } catch {}
         return { ...item, matchedReasons: matched };
       })
@@ -379,17 +390,23 @@ export default function AuditDashboard() {
         {activeEngine === 'B' && (
           <div>
             <div className="text-xs text-gray-500 mb-2 px-1">勾選要啟用的規則，規則之間為「或」關係</div>
-            <RuleCard rule={filtersB.rule1} ruleKey="rule1" title="① 充銷比(高) + 銷量" desc="充值銷量比 ≥ 閾值 且 銷量 ≥ 閾值"
-              fields={[{ field: 'ratioHigh', label: '充銷比(高) ≥' }, { field: 'salesMin', label: '銷量 ≥' }]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule2} ruleKey="rule2" title="② 充銷比(低) + 銷量" desc="充值銷量比 ≤ 閾值 且 銷量 ≥ 閾值"
-              fields={[{ field: 'ratioLow', label: '充銷比(低) ≤' }, { field: 'salesMin', label: '銷量 ≥' }]} stateUpdater={setFiltersB} />
+            <RuleCard rule={filtersB.rule1} ruleKey="rule1" title="① 充銷比(高) + 銷量區間" desc="比值≥閾值 且 銷量落在[最小, 最大]區間內"
+              fields={[
+                { field: 'ratioHigh', label: '充銷比(高) ≥' },
+                { field: 'salesMin', label: '銷量(小) ≥' },
+                { field: 'salesMax', label: '銷量(大) ≤' },
+              ]} stateUpdater={setFiltersB} />
+            <RuleCard rule={filtersB.rule2} ruleKey="rule2" title="② 充銷比(低) + 充值區間" desc="比值≤閾值 且 充值落在[最小, 最大]區間內"
+              fields={[
+                { field: 'ratioLow', label: '充銷比(低) ≤' },
+                { field: 'depositMin', label: '充值(小) ≥' },
+                { field: 'depositMax', label: '充值(大) ≤' },
+              ]} stateUpdater={setFiltersB} />
             <RuleCard rule={filtersB.rule3} ruleKey="rule3" title="③ 返點" desc="返點 ≥ 閾值"
               fields={[{ field: 'treatmentMin', label: '返點 ≥' }]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule4} ruleKey="rule4" title="④ 充值金額" desc="充值 ≥ 閾值"
-              fields={[{ field: 'depositMin', label: '充值 ≥' }]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule5} ruleKey="rule5" title="⑤ 盈虧" desc="盈利 ≥ 閾值"
+            <RuleCard rule={filtersB.rule4} ruleKey="rule4" title="④ 盈虧" desc="盈利 ≥ 閾值"
               fields={[{ field: 'profitMin', label: '盈虧 ≥' }]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule6} ruleKey="rule6" title="⑥ 無充值銷量高" desc="充值 = 0 且 銷量 ≥ 閾值"
+            <RuleCard rule={filtersB.rule5} ruleKey="rule5" title="⑤ 無充值銷量高" desc="充值 = 0 且 銷量 ≥ 閾值"
               fields={[{ field: 'salesMin', label: '銷量 ≥' }]} stateUpdater={setFiltersB} />
           </div>
         )}
@@ -406,12 +423,11 @@ export default function AuditDashboard() {
             <div>🔸 通過過濾條件筆數：<b>{filteredData.length}</b></div>
             {activeEngine === 'B' && (() => {
               const active: string[] = [];
-              if (appliedFiltersB.rule1.active) active.push(`①充銷比高: 比值≥${appliedFiltersB.rule1.ratioHigh}, 銷量≥${appliedFiltersB.rule1.salesMin}`);
-              if (appliedFiltersB.rule2.active) active.push(`②充銷比低: 比值≤${appliedFiltersB.rule2.ratioLow}, 銷量≥${appliedFiltersB.rule2.salesMin}`);
+              if (appliedFiltersB.rule1.active) active.push(`①充銷比高: 比值≥${appliedFiltersB.rule1.ratioHigh}, 銷量∈[${appliedFiltersB.rule1.salesMin}, ${appliedFiltersB.rule1.salesMax}]`);
+              if (appliedFiltersB.rule2.active) active.push(`②充銷比低: 比值≤${appliedFiltersB.rule2.ratioLow}, 充值∈[${appliedFiltersB.rule2.depositMin}, ${appliedFiltersB.rule2.depositMax}]`);
               if (appliedFiltersB.rule3.active) active.push(`③高返點: 返點≥${appliedFiltersB.rule3.treatmentMin}`);
-              if (appliedFiltersB.rule4.active) active.push(`④大額充值: 充值≥${appliedFiltersB.rule4.depositMin}`);
-              if (appliedFiltersB.rule5.active) active.push(`⑤大額盈利: 盈虧≥${appliedFiltersB.rule5.profitMin}`);
-              if (appliedFiltersB.rule6.active) active.push(`⑥無充值銷量高: 銷量≥${appliedFiltersB.rule6.salesMin}`);
+              if (appliedFiltersB.rule4.active) active.push(`④大額盈利: 盈虧≥${appliedFiltersB.rule4.profitMin}`);
+              if (appliedFiltersB.rule5.active) active.push(`⑤無充值銷量高: 銷量≥${appliedFiltersB.rule5.salesMin}`);
               return active.length > 0 ? (
                 <div className="mt-1 text-xs text-gray-700">
                   <span className="font-bold">🔧 本次查詢套用規則：</span>

@@ -162,7 +162,17 @@ export default function AuditDashboard() {
   const [appliedFiltersA, setAppliedFiltersA] = useState(defaultFiltersA);
   const [appliedFiltersB, setAppliedFiltersB] = useState(defaultFiltersB);
 
-  const [sortBy, setSortBy] = useState<string>('');
+  type SortCol = 'totalSales' | 'deposit' | 'ratio' | 'treatment' | 'profit';
+  type SortState = { col: SortCol; dir: 'asc' | 'desc' } | null;
+  const [sortBy, setSortBy] = useState<SortState>(null);
+
+  const handleSort = (col: SortCol) => {
+    setSortBy(prev => {
+      if (!prev || prev.col !== col) return { col, dir: 'desc' };
+      if (prev.dir === 'desc') return { col, dir: 'asc' };
+      return null; // 第三下清除
+    });
+  };
 
   const filteredData = useMemo(() => {
     if (!Array.isArray(rawData)) return [];
@@ -197,17 +207,12 @@ export default function AuditDashboard() {
       .filter((item: any) => !anyRuleActive || item.matchedReasons.length > 0);
 
     if (sortBy) {
-      const sortMap: Record<string, (a: any, b: any) => number> = {
-        '充銷比高': (a, b) => b.ratio - a.ratio,
-        '充銷比低': (a, b) => a.ratio - b.ratio,
-        '高返點': (a, b) => b.treatment - a.treatment,
-        '大額充值': (a, b) => b.deposit - a.deposit,
-        '大額盈利': (a, b) => b.profit - a.profit,
-        '無充值銷量高': (a, b) => b.totalSales - a.totalSales,
-      };
-      if (sortMap[sortBy]) {
-        return [...result].sort(sortMap[sortBy]);
-      }
+      const sign = sortBy.dir === 'desc' ? -1 : 1;
+      return [...result].sort((a, b) => {
+        const av = Number(a[sortBy.col]) || 0;
+        const bv = Number(b[sortBy.col]) || 0;
+        return (av - bv) * sign;
+      });
     }
     return result;
   }, [rawData, activeEngine, appliedFiltersA, appliedFiltersB, sortBy]);
@@ -262,7 +267,7 @@ export default function AuditDashboard() {
     setRawSample(null);
     setShowRawSample(false);
     setCheckedItems(new Set());
-    setSortBy('');
+    setSortBy(null);
     setHasQueried(true);
     // 把當下側邊欄的條件「凍結」成套用版本，這之後再勾選也不會影響表格
     setAppliedFiltersA(filtersA);
@@ -454,30 +459,10 @@ export default function AuditDashboard() {
           </div>
         )}
 
-        {activeEngine === 'B' && (
-          <div className="bg-white rounded-lg shadow border border-gray-200 p-3 mb-4 flex items-center gap-3">
-            <span className="text-sm font-bold text-gray-700">🔀 排序：</span>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
-            >
-              <option value="">不排序 (原順序)</option>
-              <option value="充銷比高">① 充銷比高 (充值銷量比 高→低)</option>
-              <option value="充銷比低">② 充銷比低 (充值銷量比 低→高)</option>
-              <option value="高返點">③ 高返點 (返點 高→低)</option>
-              <option value="大額充值">④ 大額充值 (充值 高→低)</option>
-              <option value="大額盈利">⑤ 大額盈利 (盈虧 高→低)</option>
-              <option value="無充值銷量高">⑥ 無充值銷量高 (銷量 高→低)</option>
-            </select>
-            {sortBy && (
-              <button
-                onClick={() => setSortBy('')}
-                className="text-xs text-gray-500 hover:text-red-500 underline"
-              >
-                清除
-              </button>
-            )}
+        {activeEngine === 'B' && hasQueried && sortBy && (
+          <div className="mb-3 text-xs text-gray-600">
+            目前排序：<b>{ ({totalSales:'銷量', deposit:'充值', ratio:'充值銷量比', treatment:'返點', profit:'盈虧'} as any)[sortBy.col] }</b> {sortBy.dir === 'desc' ? '↓ 高→低' : '↑ 低→高'}
+            <button onClick={() => setSortBy(null)} className="ml-2 text-blue-500 hover:text-red-500 underline">清除排序</button>
           </div>
         )}
 
@@ -493,7 +478,28 @@ export default function AuditDashboard() {
                 {activeEngine === 'A' ? (
                   <><th className="p-4 font-bold text-gray-600">總銷量</th><th className="p-4 font-bold text-gray-600">單數</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
                 ) : (
-                  <><th className="p-4 font-bold text-gray-600">銷量</th><th className="p-4 font-bold text-gray-600">充值</th><th className="p-4 font-bold text-gray-600">充值銷量比</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th></>
+                  <>
+                    {([
+                      { col: 'totalSales', label: '銷量' },
+                      { col: 'deposit', label: '充值' },
+                      { col: 'ratio', label: '充值銷量比' },
+                      { col: 'treatment', label: '返點' },
+                      { col: 'profit', label: '盈虧' },
+                    ] as { col: SortCol; label: string }[]).map(({ col, label }) => {
+                      const isActive = sortBy?.col === col;
+                      const arrow = isActive ? (sortBy!.dir === 'desc' ? '↓' : '↑') : '↕';
+                      return (
+                        <th
+                          key={col}
+                          onClick={() => handleSort(col)}
+                          className={`p-4 font-bold select-none cursor-pointer hover:bg-gray-200 transition-colors ${isActive ? 'text-blue-600' : 'text-gray-600'}`}
+                          title="點擊切換排序 (降冪→升冪→清除)"
+                        >
+                          {label} <span className={`ml-1 text-xs ${isActive ? 'text-blue-600' : 'text-gray-400'}`}>{arrow}</span>
+                        </th>
+                      );
+                    })}
+                  </>
                 )}
               </tr>
             </thead>

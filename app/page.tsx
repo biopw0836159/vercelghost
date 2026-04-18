@@ -21,11 +21,38 @@ function isTokenExpired(token: string): boolean {
   }
 }
 
+// 處理後台可能回傳帶逗號的字串數字，例如 "53,684.13"
+const parseNum = (v: any): number => {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'number') return isNaN(v) ? 0 : v;
+  const cleaned = String(v).replace(/,/g, '').trim();
+  if (cleaned === '') return 0;
+  const n = Number(cleaned);
+  return isNaN(n) ? 0 : n;
+};
+
+// 模糊搜尋 key (去除空白/底線/連字號，做小寫比對)
+const findField = (item: any, patterns: RegExp[]): any => {
+  for (const key of Object.keys(item)) {
+    const norm = key.replace(/[\s_\-]/g, '').toLowerCase();
+    for (const p of patterns) {
+      if (p.test(norm) || p.test(key)) return item[key];
+    }
+  }
+  return undefined;
+};
+
 const normalizeData = (item: any, engine: 'A' | 'B') => {
-  const deposit = Number(item['充值'] || item.deposit || item.deposit_amount || item.recharge || 0);
-  const totalSales = Number(item['投注'] || item.totalSales || item.total_sales || item.sales || item.bet_amount || 0);
-  const directRatio = Number(item['充销比'] || item['充銷比'] || item.deposit_sales_ratio || item.ratio || 0);
+  const deposit = parseNum(item['充值'] ?? item.deposit ?? item.deposit_amount ?? item.recharge ?? findField(item, [/充值/, /deposit/i, /recharge/i]));
+  const totalSales = parseNum(item['投注'] ?? item.totalSales ?? item.total_sales ?? item.sales ?? item.bet_amount ?? findField(item, [/投注/, /銷量/, /销量/, /sales/i, /betamount/i]));
+  const directRatio = parseNum(item['充销比'] ?? item['充銷比'] ?? item.deposit_sales_ratio ?? item.ratio ?? findField(item, [/充销比/, /充銷比/, /depositsalesratio/i]));
   const ratio = directRatio > 0 ? directRatio : (deposit > 0 ? Number((totalSales / deposit).toFixed(2)) : 0);
+
+  // 返點：先試精確 key，再用模糊比對 (只要 key 裡有「返点」「返點」「rebate」就抓)
+  const rebateRaw =
+    item['总返点'] ?? item['總返點'] ?? item['总返點'] ?? item['總返点'] ??
+    item.rebate ?? item.total_rebate ?? item.totalRebate ?? item.treatment ??
+    findField(item, [/返点/, /返點/, /rebate/i]);
 
   return {
     id: item.account || item.username || item['用户名'] || item.member_id || item.id || Math.random().toString(),
@@ -36,14 +63,14 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
             (typeof item.reason === 'string' ? item.reason :
              (item.abnormal_reason || item.remark || '')),
     totalSales,
-    orderCount: Number(item.orderCount || item.order_count || item.orders || item.bet_count || 0),
-    pnl: Number(item['盈亏'] || item.pnl || item.profit || item.net_profit || item.profit_loss || 0),
-    rtp: Number(item.rtp || item.return_to_player || 0),
+    orderCount: parseNum(item.orderCount ?? item.order_count ?? item.orders ?? item.bet_count),
+    pnl: parseNum(item['盈亏'] ?? item.pnl ?? item.profit ?? item.net_profit ?? item.profit_loss),
+    rtp: parseNum(item.rtp ?? item.return_to_player),
     deposit,
     ratio,
-    treatment: Number(item['总返点'] || item['總返點'] || item.rebate || item.total_rebate || item.treatment || 0),
-    betAmount: Number(item['投注'] || item.betAmount || item.bet_amount || item.sales || 0),
-    profit: Number(item['盈亏'] || item.profit || item.pnl || item.net_profit || 0),
+    treatment: parseNum(rebateRaw),
+    betAmount: parseNum(item['投注'] ?? item.betAmount ?? item.bet_amount ?? item.sales),
+    profit: parseNum(item['盈亏'] ?? item.profit ?? item.pnl ?? item.net_profit),
   };
 };
 
@@ -101,6 +128,8 @@ export default function AuditDashboard() {
   const [platform, setPlatform] = useState('ALL');
 
   const [rawData, setRawData] = useState<any[]>([]);
+  const [rawSample, setRawSample] = useState<any>(null);
+  const [showRawSample, setShowRawSample] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set());
@@ -122,7 +151,10 @@ export default function AuditDashboard() {
     rule3: { active: false, treatmentMin: 50000 },
     rule4: { active: false, depositMin: 100000 },
     rule5: { active: false, profitMin: 100000 },
+    rule6: { active: false, salesMin: 5000 },
   });
+
+  const [sortBy, setSortBy] = useState<string>('');
 
   const filteredData = useMemo(() => {
     if (!Array.isArray(rawData)) return [];
@@ -141,20 +173,36 @@ export default function AuditDashboard() {
       });
     }
     const anyRuleActive = Object.values(filtersB).some((r: any) => r.active);
-    return rawData
+    const result = rawData
       .map((item: any) => {
         const matched: string[] = [];
         try {
-          if (filtersB.rule1.active && item.ratio >= filtersB.rule1.ratioHigh && item.totalSales >= filtersB.rule1.salesMin) matched.push('充銷比高');
-          if (filtersB.rule2.active && item.ratio <= filtersB.rule2.ratioLow && item.totalSales >= filtersB.rule2.salesMin) matched.push('充銷比低');
+          if (filtersB.rule1.active && item.deposit > 0 && item.ratio >= filtersB.rule1.ratioHigh && item.totalSales >= filtersB.rule1.salesMin) matched.push('充銷比高');
+          if (filtersB.rule2.active && item.deposit > 0 && item.ratio <= filtersB.rule2.ratioLow && item.totalSales >= filtersB.rule2.salesMin) matched.push('充銷比低');
           if (filtersB.rule3.active && item.treatment >= filtersB.rule3.treatmentMin) matched.push('高返點');
           if (filtersB.rule4.active && item.deposit >= filtersB.rule4.depositMin) matched.push('大額充值');
           if (filtersB.rule5.active && item.profit >= filtersB.rule5.profitMin) matched.push('大額盈利');
+          if (filtersB.rule6.active && item.deposit === 0 && item.totalSales >= filtersB.rule6.salesMin) matched.push('無充值銷量高');
         } catch {}
         return { ...item, matchedReasons: matched };
       })
       .filter((item: any) => !anyRuleActive || item.matchedReasons.length > 0);
-  }, [rawData, activeEngine, filtersA, filtersB]);
+
+    if (sortBy) {
+      const sortMap: Record<string, (a: any, b: any) => number> = {
+        '充銷比高': (a, b) => b.ratio - a.ratio,
+        '充銷比低': (a, b) => a.ratio - b.ratio,
+        '高返點': (a, b) => b.treatment - a.treatment,
+        '大額充值': (a, b) => b.deposit - a.deposit,
+        '大額盈利': (a, b) => b.profit - a.profit,
+        '無充值銷量高': (a, b) => b.totalSales - a.totalSales,
+      };
+      if (sortMap[sortBy]) {
+        return [...result].sort(sortMap[sortBy]);
+      }
+    }
+    return result;
+  }, [rawData, activeEngine, filtersA, filtersB, sortBy]);
 
   useEffect(() => {
     const saved = sessionStorage.getItem(TOKEN_KEY);
@@ -203,6 +251,8 @@ export default function AuditDashboard() {
     setLoading(true);
     setErrorMsg('');
     setRawData([]);
+    setRawSample(null);
+    setShowRawSample(false);
     setHasQueried(true);
     try {
       const platforms = platform === 'ALL' ? ALL_PLATFORMS : [platform];
@@ -238,6 +288,7 @@ export default function AuditDashboard() {
       }
 
       const rawArray: any[] = Array.isArray(json.rows) ? json.rows : (Array.isArray(json) ? json : []);
+      if (rawArray.length > 0) setRawSample(rawArray[0]);
       const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
       setRawData(cleanData);
 
@@ -312,6 +363,8 @@ export default function AuditDashboard() {
               fields={[{ field: 'depositMin', label: '充值 ≥' }]} stateUpdater={setFiltersB} />
             <RuleCard rule={filtersB.rule5} ruleKey="rule5" title="⑤ 盈虧" desc="盈利 ≥ 閾值"
               fields={[{ field: 'profitMin', label: '盈虧 ≥' }]} stateUpdater={setFiltersB} />
+            <RuleCard rule={filtersB.rule6} ruleKey="rule6" title="⑥ 無充值銷量高" desc="充值 = 0 且 銷量 ≥ 閾值"
+              fields={[{ field: 'salesMin', label: '銷量 ≥' }]} stateUpdater={setFiltersB} />
           </div>
         )}
       </div>
@@ -331,6 +384,28 @@ export default function AuditDashboard() {
             {rawData.length === 0 && !errorMsg && (
               <div className="text-orange-600 font-bold mt-2">⚠️ API 回傳空陣列（日期/平台可能無資料，或後端結構不符）</div>
             )}
+            {rawSample && (
+              <div className="mt-2 pt-2 border-t border-yellow-300">
+                <button
+                  onClick={() => setShowRawSample(!showRawSample)}
+                  className="text-blue-600 hover:text-blue-800 underline text-xs"
+                >
+                  {showRawSample ? '🔽 收起' : '🔍 檢視原始 API 第一筆資料 (用於確認欄位名稱)'}
+                </button>
+                {showRawSample && (
+                  <div className="mt-2 bg-white border border-gray-300 rounded p-2 max-h-80 overflow-auto">
+                    <div className="text-xs text-gray-500 mb-1">欄位 keys：</div>
+                    <div className="text-xs text-purple-700 mb-2 break-all">
+                      {Object.keys(rawSample).join('  |  ')}
+                    </div>
+                    <div className="text-xs text-gray-500 mb-1">完整內容：</div>
+                    <pre className="text-xs text-gray-800 whitespace-pre-wrap break-all">
+                      {JSON.stringify(rawSample, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -338,6 +413,33 @@ export default function AuditDashboard() {
           <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded shadow" role="alert">
             <p className="font-bold mb-2">查詢發生錯誤</p>
             <pre className="whitespace-pre-wrap text-sm font-mono">{errorMsg}</pre>
+          </div>
+        )}
+
+        {activeEngine === 'B' && (
+          <div className="bg-white rounded-lg shadow border border-gray-200 p-3 mb-4 flex items-center gap-3">
+            <span className="text-sm font-bold text-gray-700">🔀 排序：</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            >
+              <option value="">不排序 (原順序)</option>
+              <option value="充銷比高">① 充銷比高 (充值銷量比 高→低)</option>
+              <option value="充銷比低">② 充銷比低 (充值銷量比 低→高)</option>
+              <option value="高返點">③ 高返點 (返點 高→低)</option>
+              <option value="大額充值">④ 大額充值 (充值 高→低)</option>
+              <option value="大額盈利">⑤ 大額盈利 (盈虧 高→低)</option>
+              <option value="無充值銷量高">⑥ 無充值銷量高 (銷量 高→低)</option>
+            </select>
+            {sortBy && (
+              <button
+                onClick={() => setSortBy('')}
+                className="text-xs text-gray-500 hover:text-red-500 underline"
+              >
+                清除
+              </button>
+            )}
           </div>
         )}
 

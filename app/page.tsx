@@ -55,7 +55,7 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
     findField(item, [/返点/, /返點/, /rebate/i]);
 
   return {
-    id: item.account || item.username || item['用户名'] || item.member_id || item.id || Math.random().toString(),
+    id: `${item['平台'] || item.platform || item.site || item.merchant || '-'}::${item.account || item.username || item['用户名'] || item.member_id || item.id || Math.random().toString()}`,
     platform: item['平台'] || item.platform || item.site || item.merchant || '-',
     username: item['用户名'] || item.account || item.username || item.user_name || '-',
     lottery: item['彩种'] || item.lotteryType || item.lottery || item.lottery_name || '-',
@@ -319,7 +319,16 @@ export default function AuditDashboard() {
       const rawArray: any[] = Array.isArray(json.rows) ? json.rows : (Array.isArray(json) ? json : []);
       if (rawArray.length > 0) setRawSample(rawArray[0]);
       const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
-      setRawData(cleanData);
+
+      // 後端可能因 platforms 參數未生效或 SQL 未去重而回傳重複列，前端以 平台+用戶名 去重
+      const seen = new Map<string, any>();
+      for (const row of cleanData) {
+        const key = `${row.platform}::${row.username}`;
+        if (!seen.has(key)) seen.set(key, row);
+      }
+      const deduped = Array.from(seen.values());
+
+      setRawData(deduped);
 
     } catch (error: any) {
       console.error('查詢失敗:', error);

@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     dateStart,
     dateEnd,
     lottery: '',
-    noAccountMode: true,
+    noAccountMode: false,
     platforms,
   };
 

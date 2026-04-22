@@ -65,6 +65,15 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
   // id 專用：抓不到用戶名時退回 member_id/id/隨機，避免不同人被併成同一列
   const idUser = usernameRaw ?? item.member_id ?? item.id ?? Math.random().toString();
 
+  const pnl = parseNum(item['盈亏'] ?? item['盈虧'] ?? item.pnl ?? item.profit ?? item.net_profit ?? item.profit_loss);
+  // 獎金：後端可能叫 奖金/獎金/bonus/prize/payout/win_amount；抓不到就用 盈虧 + 投注 回推
+  const bonusRaw =
+    item['奖金'] ?? item['獎金'] ?? item.bonus ?? item.prize ?? item.payout ?? item.win_amount ??
+    findField(item, [/[奖獎]金/, /bonus/i, /prize/i, /payout/i, /winamount/i]);
+  const bonus = (bonusRaw !== undefined && bonusRaw !== null && bonusRaw !== '')
+    ? parseNum(bonusRaw)
+    : (pnl + totalSales);
+
   return {
     id: `${item['平台'] || item.platform || item.site || item.merchant || '-'}::${idUser}::${item['彩种'] || item.lotteryType || item.lottery || item.lottery_name || '-'}`,
     platform: item['平台'] || item.platform || item.site || item.merchant || '-',
@@ -75,7 +84,8 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
              (item.abnormal_reason || item.remark || '')),
     totalSales,
     orderCount: parseNum(item.orderCount ?? item.order_count ?? item.orders ?? item.bet_count),
-    pnl: parseNum(item['盈亏'] ?? item.pnl ?? item.profit ?? item.net_profit ?? item.profit_loss),
+    pnl,
+    bonus,
     rtp: parseNum(item.rtp ?? item.return_to_player),
     deposit,
     ratio,
@@ -334,18 +344,60 @@ export default function AuditDashboard() {
       if (rawArray.length > 0) setRawSample(rawArray[0]);
       const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
 
-      // 引擎 A (用戶彩票分析)：一個用戶會有多個彩種，key 要帶 lottery，否則會被當成重複丟掉
-      // 引擎 B (盈虧排行)：一人一筆，只用 平台+用戶名 即可
-      const seen = new Map<string, any>();
-      for (const row of cleanData) {
-        const key = activeEngine === 'A'
-          ? `${row.platform}::${row.username}::${row.lottery}`
-          : `${row.platform}::${row.username}`;
-        if (!seen.has(key)) seen.set(key, row);
+      // 引擎 A (用戶彩票分析)：按「平台+用戶名」聚合 —— 投注/單數/盈虧/獎金 加總，
+      //   彩種列成清單，RTP 用加總後的「Σ獎金 / Σ投注」重算（加權平均，不是簡單平均）
+      // 引擎 B (盈虧排行)：一人一筆，只用 平台+用戶名 去重即可
+      let finalRows: any[];
+      if (activeEngine === 'A') {
+        const groups = new Map<string, any>();
+        for (const row of cleanData) {
+          const key = `${row.platform}::${row.username}`;
+          let g = groups.get(key);
+          if (!g) {
+            g = {
+              id: key,
+              platform: row.platform,
+              username: row.username,
+              _lotteries: new Set<string>(),
+              _reasons: new Set<string>(),
+              totalSales: 0,
+              orderCount: 0,
+              pnl: 0,
+              bonus: 0,
+            };
+            groups.set(key, g);
+          }
+          if (row.lottery && row.lottery !== '-') g._lotteries.add(row.lottery);
+          if (row.reason) {
+            String(row.reason).split(/[,，、]/).map(s => s.trim()).filter(Boolean).forEach(r => g._reasons.add(r));
+          }
+          g.totalSales += row.totalSales;
+          g.orderCount += row.orderCount;
+          g.pnl += row.pnl;
+          g.bonus += row.bonus;
+        }
+        finalRows = Array.from(groups.values()).map(g => ({
+          id: g.id,
+          platform: g.platform,
+          username: g.username,
+          lottery: Array.from(g._lotteries).join('、') || '-',
+          reason: Array.from(g._reasons).join('、'),
+          totalSales: Number(g.totalSales.toFixed(3)),
+          orderCount: g.orderCount,
+          pnl: Number(g.pnl.toFixed(3)),
+          bonus: Number(g.bonus.toFixed(3)),
+          rtp: g.totalSales > 0 ? Number((g.bonus / g.totalSales).toFixed(4)) : 0,
+        }));
+      } else {
+        const seen = new Map<string, any>();
+        for (const row of cleanData) {
+          const key = `${row.platform}::${row.username}`;
+          if (!seen.has(key)) seen.set(key, row);
+        }
+        finalRows = Array.from(seen.values());
       }
-      const deduped = Array.from(seen.values());
 
-      setRawData(deduped);
+      setRawData(finalRows);
 
     } catch (error: any) {
       console.error('查詢失敗:', error);
@@ -555,7 +607,7 @@ export default function AuditDashboard() {
                     <td className="p-4"><input type="checkbox" className="w-4 h-4 cursor-pointer" checked={checkedItems.has(item.id)} onChange={() => toggleCheck(item.id)} /></td>
                     <td className="p-4 font-medium">{item.platform}</td>
                     <td className="p-4 text-blue-600 font-bold">{item.username}</td>
-                    {activeEngine === 'A' && <td className="p-4">{item.lottery}</td>}
+                    {activeEngine === 'A' && <td className="p-4 whitespace-normal max-w-xs">{item.lottery}</td>}
                     <td className="p-4">
                       {activeEngine === 'B' && item.matchedReasons?.length > 0 ? (
                         <div className="flex flex-wrap gap-1">

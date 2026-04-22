@@ -302,7 +302,7 @@ export default function AuditDashboard() {
         dateStart,
         dateEnd,
         lottery: '',
-        noAccountMode: true,
+        noAccountMode: false,
         platforms,
       };
 

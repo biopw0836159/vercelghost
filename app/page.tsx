@@ -342,9 +342,9 @@ export default function AuditDashboard() {
       if (rawArray.length > 0) setRawSample(rawArray[0]);
       const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
 
-      // 引擎 A (用戶彩票分析)：按「平台+用戶名」聚合 —— 投注/盈虧/獎金/返點 加總，
+      // 引擎 A (用戶采種分析查詢)：按「平台+用戶名」聚合 —— 投注/盈虧/獎金/返點 加總，
       //   彩種列成清單，RTP 用加總後的「Σ獎金 / Σ投注」重算（加權平均，不是簡單平均）
-      // 引擎 B (盈虧排行)：一人一筆，只用 平台+用戶名 去重即可
+      // 引擎 B (會員輸贏統計)：一人一筆，只用 平台+用戶名 去重即可
       let finalRows: any[];
       if (activeEngine === 'A') {
         const groups = new Map<string, any>();
@@ -422,11 +422,11 @@ export default function AuditDashboard() {
         <div className="space-y-2 mb-8">
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" name="engine" checked={activeEngine === 'A'} onChange={() => setActiveEngine('A')} className="w-4 h-4 text-red-500" />
-            <span className={activeEngine === 'A' ? "font-bold text-black" : "text-gray-600"}>用戶彩票分析</span>
+            <span className={activeEngine === 'A' ? "font-bold text-black" : "text-gray-600"}>用戶采種分析查詢</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" name="engine" checked={activeEngine === 'B'} onChange={() => setActiveEngine('B')} className="w-4 h-4 text-gray-800" />
-            <span className={activeEngine === 'B' ? "font-bold text-black" : "text-gray-600"}>盈虧排行</span>
+            <span className={activeEngine === 'B' ? "font-bold text-black" : "text-gray-600"}>會員輸贏統計</span>
           </label>
         </div>
 
@@ -492,7 +492,7 @@ export default function AuditDashboard() {
 
       <div className="flex-1 p-8 overflow-y-auto bg-gray-50 relative">
         <div className="bg-slate-800 text-white rounded-lg p-6 mb-6 text-center text-3xl font-bold shadow-lg">
-          📊 {activeEngine === 'A' ? '用戶彩票分析' : '盈虧排行'}
+          📊 {activeEngine === 'A' ? '用戶采種分析查詢' : '會員輸贏統計'}
         </div>
 
         {hasQueried && !loading && (

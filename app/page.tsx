@@ -54,11 +54,13 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
     item.rebate ?? item.total_rebate ?? item.totalRebate ?? item.treatment ??
     findField(item, [/返点/, /返點/, /rebate/i]);
 
-  // 用戶名：後端可能叫「账号 / 賬號 / 用户名 / 用戶名 / account / username …」各種版本，都要抓得到
+  // 用戶名：後端可能叫「账号/帐号/賬號/帳號/用户名/用戶名/account/username」各種版本
+  // 注意：账(新簡) 帐(舊簡) 賬(繁) 帳(另一繁) 四個字 JS 眼裡都不同，用字元類別一次蓋
   const usernameRaw =
-    item['账号'] ?? item['賬號'] ?? item['用户名'] ?? item['用戶名'] ??
+    item['帐号'] ?? item['账号'] ?? item['賬號'] ?? item['帳號'] ??
+    item['用户名'] ?? item['用戶名'] ??
     item.account ?? item.username ?? item.user_name ??
-    findField(item, [/账号/, /賬號/, /用户名/, /用戶名/, /account/i, /username/i]);
+    findField(item, [/[账帐賬帳][号號]/, /用[户戶]名/, /account/i, /username/i]);
   const username = usernameRaw ?? '-';
   // id 專用：抓不到用戶名時退回 member_id/id/隨機，避免不同人被併成同一列
   const idUser = usernameRaw ?? item.member_id ?? item.id ?? Math.random().toString();

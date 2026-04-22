@@ -160,7 +160,6 @@ export default function AuditDashboard() {
   const defaultFiltersA = {
     minSales: { active: true, value: 0.00 },
     maxSales: { active: true, value: 2000.00 },
-    maxOrders: { active: true, value: 12 },
     minPnl: { active: true, value: 100000.00 },
     maxPnl: { active: true, value: 1000000.00 },
     minRtp: { active: true, value: 0.995 },
@@ -202,7 +201,6 @@ export default function AuditDashboard() {
         try {
           if (appliedFiltersA.minSales.active && item.totalSales < appliedFiltersA.minSales.value) return false;
           if (appliedFiltersA.maxSales.active && item.totalSales > appliedFiltersA.maxSales.value) return false;
-          if (appliedFiltersA.maxOrders.active && item.orderCount > appliedFiltersA.maxOrders.value) return false;
           if (appliedFiltersA.minPnl.active && item.pnl < appliedFiltersA.minPnl.value) return false;
           if (appliedFiltersA.maxPnl.active && item.pnl > appliedFiltersA.maxPnl.value) return false;
           if (appliedFiltersA.minRtp.active && item.rtp < appliedFiltersA.minRtp.value) return false;
@@ -344,7 +342,7 @@ export default function AuditDashboard() {
       if (rawArray.length > 0) setRawSample(rawArray[0]);
       const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
 
-      // 引擎 A (用戶彩票分析)：按「平台+用戶名」聚合 —— 投注/單數/盈虧/獎金 加總，
+      // 引擎 A (用戶彩票分析)：按「平台+用戶名」聚合 —— 投注/盈虧/獎金/返點 加總，
       //   彩種列成清單，RTP 用加總後的「Σ獎金 / Σ投注」重算（加權平均，不是簡單平均）
       // 引擎 B (盈虧排行)：一人一筆，只用 平台+用戶名 去重即可
       let finalRows: any[];
@@ -364,6 +362,7 @@ export default function AuditDashboard() {
               orderCount: 0,
               pnl: 0,
               bonus: 0,
+              treatment: 0,
             };
             groups.set(key, g);
           }
@@ -375,6 +374,7 @@ export default function AuditDashboard() {
           g.orderCount += row.orderCount;
           g.pnl += row.pnl;
           g.bonus += row.bonus;
+          g.treatment += row.treatment;
         }
         finalRows = Array.from(groups.values()).map(g => ({
           id: g.id,
@@ -386,6 +386,7 @@ export default function AuditDashboard() {
           orderCount: g.orderCount,
           pnl: Number(g.pnl.toFixed(3)),
           bonus: Number(g.bonus.toFixed(3)),
+          treatment: Number(g.treatment.toFixed(3)),
           rtp: g.totalSales > 0 ? Number((g.bonus / g.totalSales).toFixed(4)) : 0,
         }));
       } else {
@@ -457,7 +458,6 @@ export default function AuditDashboard() {
           <div className="space-y-2">
             <FilterInput label="Min銷量" filterObj={filtersA.minSales} stateUpdater={setFiltersA} stateKey="minSales" />
             <FilterInput label="Max銷量" filterObj={filtersA.maxSales} stateUpdater={setFiltersA} stateKey="maxSales" />
-            <FilterInput label="單數 ≤" filterObj={filtersA.maxOrders} stateUpdater={setFiltersA} stateKey="maxOrders" />
             <FilterInput label="Min盈虧" filterObj={filtersA.minPnl} stateUpdater={setFiltersA} stateKey="minPnl" />
             <FilterInput label="Max盈虧" filterObj={filtersA.maxPnl} stateUpdater={setFiltersA} stateKey="maxPnl" />
             <FilterInput label="Min RTP" filterObj={filtersA.minRtp} stateUpdater={setFiltersA} stateKey="minRtp" />
@@ -571,7 +571,7 @@ export default function AuditDashboard() {
                 {activeEngine === 'A' && <th className="p-4 font-bold text-gray-600">彩種</th>}
                 <th className="p-4 font-bold text-gray-600">原因</th>
                 {activeEngine === 'A' ? (
-                  <><th className="p-4 font-bold text-gray-600">總銷量</th><th className="p-4 font-bold text-gray-600">單數</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
+                  <><th className="p-4 font-bold text-gray-600">總銷量</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
                 ) : (
                   <>
                     {([
@@ -620,7 +620,7 @@ export default function AuditDashboard() {
                       )}
                     </td>
                     {activeEngine === 'A' ? (
-                      <><td className="p-4">{item.totalSales}</td><td className="p-4">{item.orderCount}</td>
+                      <><td className="p-4">{item.totalSales}</td><td className="p-4">{item.treatment}</td>
                         <td className={`p-4 font-bold ${item.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{item.pnl}</td>
                         <td className="p-4">{item.rtp}</td></>
                     ) : (

@@ -55,7 +55,7 @@ const normalizeData = (item: any, engine: 'A' | 'B') => {
     findField(item, [/返点/, /返點/, /rebate/i]);
 
   return {
-    id: `${item['平台'] || item.platform || item.site || item.merchant || '-'}::${item.account || item.username || item['用户名'] || item.member_id || item.id || Math.random().toString()}`,
+    id: `${item['平台'] || item.platform || item.site || item.merchant || '-'}::${item.account || item.username || item['用户名'] || item.member_id || item.id || Math.random().toString()}::${item['彩种'] || item.lotteryType || item.lottery || item.lottery_name || '-'}`,
     platform: item['平台'] || item.platform || item.site || item.merchant || '-',
     username: item['用户名'] || item.account || item.username || item.user_name || '-',
     lottery: item['彩种'] || item.lotteryType || item.lottery || item.lottery_name || '-',
@@ -128,6 +128,7 @@ export default function AuditDashboard() {
   const [platform, setPlatform] = useState('ALL');
 
   const [rawData, setRawData] = useState<any[]>([]);
+  const [rawCount, setRawCount] = useState(0);
   const [rawSample, setRawSample] = useState<any>(null);
   const [showRawSample, setShowRawSample] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -275,6 +276,7 @@ export default function AuditDashboard() {
     setLoading(true);
     setErrorMsg('');
     setRawData([]);
+    setRawCount(0);
     setRawSample(null);
     setShowRawSample(false);
     setCheckedItems(new Set());
@@ -317,13 +319,17 @@ export default function AuditDashboard() {
       }
 
       const rawArray: any[] = Array.isArray(json.rows) ? json.rows : (Array.isArray(json) ? json : []);
+      setRawCount(rawArray.length);
       if (rawArray.length > 0) setRawSample(rawArray[0]);
       const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
 
-      // 後端可能因 platforms 參數未生效或 SQL 未去重而回傳重複列，前端以 平台+用戶名 去重
+      // 引擎 A (用戶彩票分析)：一個用戶會有多個彩種，key 要帶 lottery，否則會被當成重複丟掉
+      // 引擎 B (盈虧排行)：一人一筆，只用 平台+用戶名 即可
       const seen = new Map<string, any>();
       for (const row of cleanData) {
-        const key = `${row.platform}::${row.username}`;
+        const key = activeEngine === 'A'
+          ? `${row.platform}::${row.username}::${row.lottery}`
+          : `${row.platform}::${row.username}`;
         if (!seen.has(key)) seen.set(key, row);
       }
       const deduped = Array.from(seen.values());
@@ -428,7 +434,8 @@ export default function AuditDashboard() {
 
         {hasQueried && !loading && (
           <div className="bg-yellow-50 border border-yellow-300 rounded p-3 mb-4 text-sm font-mono">
-            <div>🔸 API 回傳原始筆數：<b>{rawData.length}</b></div>
+            <div>🔸 API 回傳原始筆數：<b>{rawCount}</b></div>
+            <div>🔸 前端去重後筆數：<b>{rawData.length}</b></div>
             <div>🔸 通過過濾條件筆數：<b>{filteredData.length}</b></div>
             {activeEngine === 'B' && (() => {
               const active: string[] = [];
@@ -446,10 +453,10 @@ export default function AuditDashboard() {
                 </div>
               ) : null;
             })()}
-            {rawData.length > 0 && filteredData.length === 0 && (
+            {rawCount > 0 && filteredData.length === 0 && (
               <div className="text-red-600 font-bold mt-2">⚠️ API 有資料，但被過濾條件全部剃除！請放寬左側規則條件。</div>
             )}
-            {rawData.length === 0 && !errorMsg && (
+            {rawCount === 0 && !errorMsg && (
               <div className="text-orange-600 font-bold mt-2">⚠️ API 回傳空陣列（日期/平台可能無資料，或後端結構不符）</div>
             )}
             {rawSample && (

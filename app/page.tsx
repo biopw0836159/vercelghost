@@ -569,9 +569,9 @@ export default function AuditDashboard() {
                 <th className="p-4 font-bold text-gray-600">平台</th>
                 <th className="p-4 font-bold text-gray-600">用戶名</th>
                 {activeEngine === 'A' && <th className="p-4 font-bold text-gray-600">彩種</th>}
-                <th className="p-4 font-bold text-gray-600">原因</th>
+                {activeEngine === 'B' && <th className="p-4 font-bold text-gray-600">原因</th>}
                 {activeEngine === 'A' ? (
-                  <><th className="p-4 font-bold text-gray-600">總銷量</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
+                  <><th className="p-4 font-bold text-gray-600">總銷量</th><th className="p-4 font-bold text-gray-600">獎金</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
                 ) : (
                   <>
                     {([
@@ -608,19 +608,21 @@ export default function AuditDashboard() {
                     <td className="p-4 font-medium">{item.platform}</td>
                     <td className="p-4 text-blue-600 font-bold">{item.username}</td>
                     {activeEngine === 'A' && <td className="p-4 whitespace-normal max-w-xs">{item.lottery}</td>}
-                    <td className="p-4">
-                      {activeEngine === 'B' && item.matchedReasons?.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {item.matchedReasons.map((r: string, i: number) => (
-                            <span key={i} className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold whitespace-nowrap">{r}</span>
-                          ))}
-                        </div>
-                      ) : (
-                        item.reason && <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">{item.reason}</span>
-                      )}
-                    </td>
+                    {activeEngine === 'B' && (
+                      <td className="p-4">
+                        {item.matchedReasons?.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {item.matchedReasons.map((r: string, i: number) => (
+                              <span key={i} className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold whitespace-nowrap">{r}</span>
+                            ))}
+                          </div>
+                        ) : (
+                          item.reason && <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">{item.reason}</span>
+                        )}
+                      </td>
+                    )}
                     {activeEngine === 'A' ? (
-                      <><td className="p-4">{item.totalSales}</td><td className="p-4">{item.treatment}</td>
+                      <><td className="p-4">{item.totalSales}</td><td className="p-4">{item.bonus}</td><td className="p-4">{item.treatment}</td>
                         <td className={`p-4 font-bold ${item.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{item.pnl}</td>
                         <td className="p-4">{item.rtp}</td></>
                     ) : (

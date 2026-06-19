@@ -8,7 +8,7 @@ export async function GET() {
     SUPABASE_URL: peek(process.env.SUPABASE_URL),
     SUPABASE_SERVICE_ROLE_KEY: peek(process.env.SUPABASE_SERVICE_ROLE_KEY),
     JWT_SECRET: peek(process.env.JWT_SECRET),
-    // SUPABASE_URL 開頭（只露 https://前綴 + 前 8 碼，方便確認專案對不對，不算機密）
+    // SUPABASE_URL 開頭（只露前 16 碼，方便確認專案對不對，不算機密）
     url_prefix: (process.env.SUPABASE_URL || '').slice(0, 16),
   });
 }

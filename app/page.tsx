@@ -490,7 +490,7 @@ export default function AuditDashboard() {
         <div className="space-y-2 mb-8">
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" name="engine" checked={activeEngine === 'A'} onChange={() => setActiveEngine('A')} className="w-4 h-4 text-red-500" />
-            <span className={activeEngine === 'A' ? "font-bold text-black" : "text-gray-600"}>用戶采種分析查詢</span>
+            <span className={activeEngine === 'A' ? "font-bold text-black" : "text-gray-600"}>采種分析查詢</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" name="engine" checked={activeEngine === 'B'} onChange={() => setActiveEngine('B')} className="w-4 h-4 text-gray-800" />
@@ -560,7 +560,7 @@ export default function AuditDashboard() {
 
       <div className="flex-1 p-8 overflow-y-auto bg-gray-50 relative">
         <div className="bg-slate-800 text-white rounded-lg p-6 mb-6 text-center text-3xl font-bold shadow-lg">
-          📊 {activeEngine === 'A' ? '用戶采種分析查詢' : '會員輸贏統計'}
+          📊 {activeEngine === 'A' ? '采種分析查詢' : '會員輸贏統計'}
         </div>
 
         {hasQueried && !loading && (

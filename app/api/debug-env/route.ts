@@ -25,20 +25,23 @@ export async function GET() {
     countTest = { ok: false, threw: (e as Error).message };
   }
 
-  // B) 跟 login 完全一樣的查詢（用 shane 試），把真正的錯誤吐出來
-  let loginQueryTest: any;
-  try {
-    const { data, error } = await supabase()
-      .from('admin_users')
-      .select('username, password_hash, must_change')
-      .eq('username', 'shane')
-      .maybeSingle();
-    loginQueryTest = error
-      ? { ok: false, error: error.message, code: (error as any).code, hint: (error as any).hint }
-      : { ok: true, found: !!data, must_change: data?.must_change, hash_len: data?.password_hash?.length ?? null };
-  } catch (e) {
-    loginQueryTest = { ok: false, threw: (e as Error).message };
-  }
+  // B) 比較「有空格」vs「無空格」的 select
+  const trySelect = async (cols: string) => {
+    try {
+      const { data, error } = await supabase()
+        .from('admin_users')
+        .select(cols)
+        .eq('username', 'shane')
+        .maybeSingle();
+      return error
+        ? { ok: false, error: error.message, code: (error as any).code }
+        : { ok: true, found: !!data };
+    } catch (e) {
+      return { ok: false, threw: (e as Error).message };
+    }
+  };
+  const withSpaces = await trySelect('username, password_hash, must_change');
+  const noSpaces = await trySelect('username,password_hash,must_change');
 
-  return NextResponse.json({ env, countTest, loginQueryTest });
+  return NextResponse.json({ env, countTest, withSpaces, noSpaces });
 }

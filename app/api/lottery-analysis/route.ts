@@ -13,6 +13,19 @@ export const runtime = 'nodejs';
 
 const BACKEND = (process.env.STATS_BACKEND_URL || 'https://stats-crawler.up.railway.app').replace(/\/+$/, '');
 
+// 代理網址：優先用單一 PROXY，否則用 PROXY_HOST/PORT/USER/PASS 組（同 777 的拆法）
+function getProxyUrl(): string | undefined {
+  if (process.env.PROXY) return process.env.PROXY;
+  const host = process.env.PROXY_HOST;
+  const port = process.env.PROXY_PORT;
+  const user = process.env.PROXY_USER;
+  const pass = process.env.PROXY_PASS;
+  if (!host || !port) return undefined;
+  return (user && pass)
+    ? `http://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}`
+    : `http://${host}:${port}`;
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const platform = searchParams.get('platform') || 'ALL';
@@ -31,8 +44,8 @@ export async function GET(req: Request) {
   const qs = new URLSearchParams({ platform, dateStart, dateEnd }).toString();
   const url = `${BACKEND}/api/open/lottery-analysis?${qs}`;
 
-  // 後端 ipGuard 只放行特定代理 IP —— 透過 PROXY 指定的代理發送
-  const proxy = process.env.PROXY;
+  // 後端 ipGuard 只放行特定代理 IP —— 透過代理發送
+  const proxy = getProxyUrl();
   const dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
 
   try {
@@ -50,8 +63,15 @@ export async function GET(req: Request) {
         {
           error: `後端轉址（status ${res.status}${loc ? '，→ ' + loc : ''}）——代理未生效/未授權，或 x-api-key 無效`,
           proxy_set: !!proxy,
-          env_present: { PROXY: !!process.env.PROXY, APIKEY: !!process.env.APIKEY, SUPABASE_URL: !!process.env.SUPABASE_URL },
-          via: 'v3-proxy',
+          env_present: {
+            PROXY: !!process.env.PROXY,
+            PROXY_HOST: !!process.env.PROXY_HOST,
+            PROXY_PORT: !!process.env.PROXY_PORT,
+            PROXY_USER: !!process.env.PROXY_USER,
+            PROXY_PASS: !!process.env.PROXY_PASS,
+            APIKEY: !!process.env.APIKEY,
+          },
+          via: 'v4-proxy-parts',
         },
         { status: 502 },
       );

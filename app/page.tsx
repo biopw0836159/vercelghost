@@ -5,12 +5,7 @@ import { useState, useMemo, useEffect } from 'react';
 const LOGIN_URL = '/api/auth/login';
 const CHANGE_PASSWORD_URL = '/api/auth/change-password';
 const TOKEN_KEY = 'audit_jwt_token';
-const ALL_PLATFORMS = ["XH","LS","OL","XY","SH","YS","JY","HS","FB","SY","LY","MT","JD","ND","YD"];
-// 注意：資料查詢端點之後會改接新的資訊來源；目前這個自有 JWT 不被 stats-crawler 舊端點接受。
-const ENGINE_URLS: Record<string, string> = {
-  A: 'https://stats-crawler.up.railway.app/api/query-user-lottery-analysis',
-  B: 'https://stats-crawler.up.railway.app/api/query-member-income',
-};
+// A 引擎 → /api/lottery-analysis，B 引擎 → /api/member-income（皆為同源代理，見 app/api/*）
 
 // 解 JWT payload（三段式 header.payload.sig，取中間段 base64url 解碼）
 function decodeJwt(token: string): any {
@@ -55,59 +50,6 @@ const findField = (item: any, patterns: RegExp[]): any => {
     }
   }
   return undefined;
-};
-
-const normalizeData = (item: any, engine: 'A' | 'B') => {
-  const deposit = parseNum(item['充值'] ?? item.deposit ?? item.deposit_amount ?? item.recharge ?? findField(item, [/充值/, /deposit/i, /recharge/i]));
-  const totalSales = parseNum(item['投注'] ?? item.totalSales ?? item.total_sales ?? item.sales ?? item.bet_amount ?? findField(item, [/投注/, /銷量/, /销量/, /sales/i, /betamount/i]));
-  const directRatio = parseNum(item['充销比'] ?? item['充銷比'] ?? item.deposit_sales_ratio ?? item.ratio ?? findField(item, [/充销比/, /充銷比/, /depositsalesratio/i]));
-  const ratio = directRatio > 0 ? directRatio : (deposit > 0 ? Number((totalSales / deposit).toFixed(2)) : 0);
-
-  // 返點：先試精確 key，再用模糊比對 (只要 key 裡有「返点」「返點」「rebate」就抓)
-  const rebateRaw =
-    item['总返点'] ?? item['總返點'] ?? item['总返點'] ?? item['總返点'] ??
-    item.rebate ?? item.total_rebate ?? item.totalRebate ?? item.treatment ??
-    findField(item, [/返点/, /返點/, /rebate/i]);
-
-  // 用戶名：後端可能叫「账号/帐号/賬號/帳號/用户名/用戶名/account/username」各種版本
-  // 注意：账(新簡) 帐(舊簡) 賬(繁) 帳(另一繁) 四個字 JS 眼裡都不同，用字元類別一次蓋
-  const usernameRaw =
-    item['帐号'] ?? item['账号'] ?? item['賬號'] ?? item['帳號'] ??
-    item['用户名'] ?? item['用戶名'] ??
-    item.account ?? item.username ?? item.user_name ??
-    findField(item, [/[账帐賬帳][号號]/, /用[户戶]名/, /account/i, /username/i]);
-  const username = usernameRaw ?? '-';
-  // id 專用：抓不到用戶名時退回 member_id/id/隨機，避免不同人被併成同一列
-  const idUser = usernameRaw ?? item.member_id ?? item.id ?? Math.random().toString();
-
-  const pnl = parseNum(item['盈亏'] ?? item['盈虧'] ?? item.pnl ?? item.profit ?? item.net_profit ?? item.profit_loss);
-  // 獎金：後端可能叫 奖金/獎金/bonus/prize/payout/win_amount；抓不到就用 盈虧 + 投注 回推
-  const bonusRaw =
-    item['奖金'] ?? item['獎金'] ?? item.bonus ?? item.prize ?? item.payout ?? item.win_amount ??
-    findField(item, [/[奖獎]金/, /bonus/i, /prize/i, /payout/i, /winamount/i]);
-  const bonus = (bonusRaw !== undefined && bonusRaw !== null && bonusRaw !== '')
-    ? parseNum(bonusRaw)
-    : (pnl + totalSales);
-
-  return {
-    id: `${item['平台'] || item.platform || item.site || item.merchant || '-'}::${idUser}::${item['彩种'] || item.lotteryType || item.lottery || item.lottery_name || '-'}`,
-    platform: item['平台'] || item.platform || item.site || item.merchant || '-',
-    username,
-    lottery: item['彩种'] || item.lotteryType || item.lottery || item.lottery_name || '-',
-    reason: Array.isArray(item.reason) ? item.reason.join(', ') :
-            (typeof item.reason === 'string' ? item.reason :
-             (item.abnormal_reason || item.remark || '')),
-    totalSales,
-    orderCount: parseNum(item.orderCount ?? item.order_count ?? item.orders ?? item.bet_count),
-    pnl,
-    bonus,
-    rtp: parseNum(item.rtp ?? item.return_to_player),
-    deposit,
-    ratio,
-    treatment: parseNum(rebateRaw),
-    betAmount: parseNum(item['投注'] ?? item.betAmount ?? item.bet_amount ?? item.sales),
-    profit: parseNum(item['盈亏'] ?? item.profit ?? item.pnl ?? item.net_profit),
-  };
 };
 
 const FilterInput = ({ label, filterObj, stateUpdater, stateKey }: any) => (
@@ -420,51 +362,44 @@ export default function AuditDashboard() {
         return;
       }
 
-      // ───── 引擎 B（會員輸贏統計）：維持原本直連 stats-crawler（之後會改接新資訊）─────
-      const platforms = platform === 'ALL' ? ALL_PLATFORMS : [platform];
-      const body = {
-        account: '',
-        byPlayType: false,
-        dateStart,
-        dateEnd,
-        lottery: '',
-        noAccountMode: false,
-        platforms,
-      };
-
-      const res = await fetch(ENGINE_URLS['B'], {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
-
+      // ───── 引擎 B（會員輸贏統計）：open API（按會員帳號匯總），走同源代理 GET ─────
+      const qs = new URLSearchParams({ platform, dateStart, dateEnd }).toString();
+      const res = await fetch(`/api/member-income?${qs}`, { headers: { Accept: 'application/json' } });
       const json = await res.json();
-
-      if (json.code === 401 || res.status === 401) {
-        sessionStorage.removeItem(TOKEN_KEY);
-        setToken('');
-        throw new Error('登入已過期，請重新登入');
+      if (!res.ok || json?.error) {
+        throw new Error(json?.error || `連線異常 (${res.status})`);
       }
-      if (!res.ok || json.error) {
-        throw new Error(json.message || json.error || `連線異常 (${res.status})`);
-      }
-
-      const rawArray: any[] = Array.isArray(json.rows) ? json.rows : (Array.isArray(json) ? json : []);
+      const rawArray: any[] = Array.isArray(json) ? json : (Array.isArray(json.rows) ? json.rows : []);
       setRawCount(rawArray.length);
       if (rawArray.length > 0) setRawSample(rawArray[0]);
-      const cleanData = rawArray.map(item => normalizeData(item, 'B'));
 
-      // 一人一筆，只用 平台+用戶名 去重
-      const seen = new Map<string, any>();
-      for (const row of cleanData) {
-        const key = `${row.platform}::${row.username}`;
-        if (!seen.has(key)) seen.set(key, row);
-      }
-      const finalRows = Array.from(seen.values());
+      // 每筆已是一個會員帳號（總投注/總返點/總盈虧/總充值）。先試精確 key，再模糊比對
+      const pick = (r: any, exacts: string[], pats: RegExp[]) => {
+        for (const k of exacts) if (r[k] !== undefined && r[k] !== null) return r[k];
+        return findField(r, pats);
+      };
+      const finalRows = rawArray.map((r: any, i: number) => {
+        const username = pick(r,
+          ['账号', '帐号', '賬號', '帳號', '会员账号', '會員帳號', '用户名', '用戶名', 'account', 'username', 'member'],
+          [/[账帐賬帳][号號]/, /用[户戶]名/, /account/i, /username/i, /member/i]) ?? '-';
+        const platformVal = pick(r, ['平台', 'platform', 'site', 'merchant'], [/平台/, /platform/i]) ?? '-';
+        const totalSales = parseNum(pick(r, ['总投注', '總投注', '投注'], [/投注/, /销量/, /銷量/, /sales/i, /betamount/i]));
+        const deposit = parseNum(pick(r, ['总充值', '總充值', '充值'], [/充值/, /deposit/i, /recharge/i]));
+        const treatment = parseNum(pick(r, ['总返点', '總返點', '总返點', '總返点', '返点', '返點'], [/返点/, /返點/, /rebate/i]));
+        const profit = parseNum(pick(r, ['总盈亏', '總盈虧', '总盈虧', '總盈亏', '盈亏', '盈虧'], [/盈亏/, /盈虧/, /pnl/i, /profit/i]));
+        const ratio = deposit > 0 ? Number((totalSales / deposit).toFixed(2)) : 0;
+        return {
+          id: `${platformVal}::${username}::${i}`,
+          platform: platformVal,
+          username,
+          totalSales,
+          deposit,
+          treatment,
+          profit,
+          ratio,
+          reason: '',
+        };
+      });
 
       setRawData(finalRows);
 

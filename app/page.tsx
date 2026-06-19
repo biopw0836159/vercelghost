@@ -391,6 +391,36 @@ export default function AuditDashboard() {
     setAppliedFiltersA(filtersA);
     setAppliedFiltersB(filtersB);
     try {
+      // ───── 引擎 A：open API（按彩種匯總），走同源代理 GET（伺服器端帶 x-api-key + PROXY）─────
+      if (activeEngine === 'A') {
+        const qs = new URLSearchParams({ platform, dateStart, dateEnd }).toString();
+        const res = await fetch(`/api/lottery-analysis?${qs}`, { headers: { Accept: 'application/json' } });
+        const json = await res.json();
+        if (!res.ok || json?.error) {
+          throw new Error(json?.error || `連線異常 (${res.status})`);
+        }
+        const rawArray: any[] = Array.isArray(json) ? json : (Array.isArray(json.rows) ? json.rows : []);
+        setRawCount(rawArray.length);
+        if (rawArray.length > 0) setRawSample(rawArray[0]);
+        // 回傳每筆已是一個彩種（多平台已合併），直接對應欄位即可
+        const finalRows = rawArray.map((r: any, i: number) => {
+          const lottery = r['彩种'] ?? r['彩種'] ?? r.lottery ?? r.lottery_name ?? '-';
+          return {
+            id: `${lottery}::${i}`,
+            lottery,
+            orderCount: parseNum(r['投注笔数'] ?? r['投注筆數'] ?? r.orderCount ?? r.order_count),
+            totalSales: parseNum(r['投注金额'] ?? r['投注金額'] ?? r.betAmount ?? r.bet_amount ?? r.totalSales),
+            bonus: parseNum(r['奖金'] ?? r['獎金'] ?? r.bonus),
+            treatment: parseNum(r['返点'] ?? r['返點'] ?? r.rebate ?? r.treatment),
+            pnl: parseNum(r['盈亏'] ?? r['盈虧'] ?? r.pnl ?? r.profit),
+            rtp: parseNum(r['RTP'] ?? r.rtp),
+          };
+        });
+        setRawData(finalRows);
+        return;
+      }
+
+      // ───── 引擎 B（會員輸贏統計）：維持原本直連 stats-crawler（之後會改接新資訊）─────
       const platforms = platform === 'ALL' ? ALL_PLATFORMS : [platform];
       const body = {
         account: '',
@@ -402,7 +432,7 @@ export default function AuditDashboard() {
         platforms,
       };
 
-      const res = await fetch(ENGINE_URLS[activeEngine] || ENGINE_URLS['A'], {
+      const res = await fetch(ENGINE_URLS['B'], {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -426,63 +456,15 @@ export default function AuditDashboard() {
       const rawArray: any[] = Array.isArray(json.rows) ? json.rows : (Array.isArray(json) ? json : []);
       setRawCount(rawArray.length);
       if (rawArray.length > 0) setRawSample(rawArray[0]);
-      const cleanData = rawArray.map(item => normalizeData(item, activeEngine));
+      const cleanData = rawArray.map(item => normalizeData(item, 'B'));
 
-      // 引擎 A (用戶采種分析查詢)：按「平台+用戶名」聚合 —— 投注/盈虧/獎金/返點 加總，
-      //   彩種列成清單，RTP 用加總後的「Σ獎金 / Σ投注」重算（加權平均，不是簡單平均）
-      // 引擎 B (會員輸贏統計)：一人一筆，只用 平台+用戶名 去重即可
-      let finalRows: any[];
-      if (activeEngine === 'A') {
-        const groups = new Map<string, any>();
-        for (const row of cleanData) {
-          const key = `${row.platform}::${row.username}`;
-          let g = groups.get(key);
-          if (!g) {
-            g = {
-              id: key,
-              platform: row.platform,
-              username: row.username,
-              _lotteries: new Set<string>(),
-              _reasons: new Set<string>(),
-              totalSales: 0,
-              orderCount: 0,
-              pnl: 0,
-              bonus: 0,
-              treatment: 0,
-            };
-            groups.set(key, g);
-          }
-          if (row.lottery && row.lottery !== '-') g._lotteries.add(row.lottery);
-          if (row.reason) {
-            String(row.reason).split(/[,，、]/).map(s => s.trim()).filter(Boolean).forEach(r => g._reasons.add(r));
-          }
-          g.totalSales += row.totalSales;
-          g.orderCount += row.orderCount;
-          g.pnl += row.pnl;
-          g.bonus += row.bonus;
-          g.treatment += row.treatment;
-        }
-        finalRows = Array.from(groups.values()).map(g => ({
-          id: g.id,
-          platform: g.platform,
-          username: g.username,
-          lottery: Array.from(g._lotteries).join('、') || '-',
-          reason: Array.from(g._reasons).join('、'),
-          totalSales: Number(g.totalSales.toFixed(3)),
-          orderCount: g.orderCount,
-          pnl: Number(g.pnl.toFixed(3)),
-          bonus: Number(g.bonus.toFixed(3)),
-          treatment: Number(g.treatment.toFixed(3)),
-          rtp: g.totalSales > 0 ? Number((g.bonus / g.totalSales).toFixed(4)) : 0,
-        }));
-      } else {
-        const seen = new Map<string, any>();
-        for (const row of cleanData) {
-          const key = `${row.platform}::${row.username}`;
-          if (!seen.has(key)) seen.set(key, row);
-        }
-        finalRows = Array.from(seen.values());
+      // 一人一筆，只用 平台+用戶名 去重
+      const seen = new Map<string, any>();
+      for (const row of cleanData) {
+        const key = `${row.platform}::${row.username}`;
+        if (!seen.has(key)) seen.set(key, row);
       }
+      const finalRows = Array.from(seen.values());
 
       setRawData(finalRows);
 
@@ -652,12 +634,10 @@ export default function AuditDashboard() {
             <thead className="bg-gray-100 border-b sticky top-0 z-20 shadow-sm">
               <tr>
                 <th className="p-4 font-bold text-gray-600">核查</th>
-                <th className="p-4 font-bold text-gray-600">平台</th>
-                <th className="p-4 font-bold text-gray-600">用戶名</th>
-                {activeEngine === 'A' && <th className="p-4 font-bold text-gray-600">彩種</th>}
-                {activeEngine === 'B' && <th className="p-4 font-bold text-gray-600">原因</th>}
+                {activeEngine === 'A' && <><th className="p-4 font-bold text-gray-600">彩種</th><th className="p-4 font-bold text-gray-600">投注筆數</th></>}
+                {activeEngine === 'B' && <><th className="p-4 font-bold text-gray-600">平台</th><th className="p-4 font-bold text-gray-600">用戶名</th><th className="p-4 font-bold text-gray-600">原因</th></>}
                 {activeEngine === 'A' ? (
-                  <><th className="p-4 font-bold text-gray-600">總銷量</th><th className="p-4 font-bold text-gray-600">獎金</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
+                  <><th className="p-4 font-bold text-gray-600">投注金額</th><th className="p-4 font-bold text-gray-600">獎金</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
                 ) : (
                   <>
                     {([
@@ -691,10 +671,10 @@ export default function AuditDashboard() {
                 filteredData.map((item: any) => (
                   <tr key={item.id} className="border-b hover:bg-blue-50 transition-colors">
                     <td className="p-4"><input type="checkbox" className="w-4 h-4 cursor-pointer" checked={checkedItems.has(item.id)} onChange={() => toggleCheck(item.id)} /></td>
-                    <td className="p-4 font-medium">{item.platform}</td>
-                    <td className="p-4 text-blue-600 font-bold">{item.username}</td>
-                    {activeEngine === 'A' && <td className="p-4 whitespace-normal max-w-xs">{item.lottery}</td>}
-                    {activeEngine === 'B' && (
+                    {activeEngine === 'A' && <><td className="p-4 font-bold text-blue-600 whitespace-normal max-w-xs">{item.lottery}</td><td className="p-4">{item.orderCount}</td></>}
+                    {activeEngine === 'B' && <>
+                      <td className="p-4 font-medium">{item.platform}</td>
+                      <td className="p-4 text-blue-600 font-bold">{item.username}</td>
                       <td className="p-4">
                         {item.matchedReasons?.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
@@ -706,7 +686,7 @@ export default function AuditDashboard() {
                           item.reason && <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">{item.reason}</span>
                         )}
                       </td>
-                    )}
+                    </>}
                     {activeEngine === 'A' ? (
                       <><td className="p-4">{item.totalSales}</td><td className="p-4">{item.bonus}</td><td className="p-4">{item.treatment}</td>
                         <td className={`p-4 font-bold ${item.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{item.pnl}</td>

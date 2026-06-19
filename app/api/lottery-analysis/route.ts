@@ -60,19 +60,7 @@ export async function GET(req: Request) {
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location') || '';
       return NextResponse.json(
-        {
-          error: `後端轉址（status ${res.status}${loc ? '，→ ' + loc : ''}）——代理未生效/未授權，或 x-api-key 無效`,
-          proxy_set: !!proxy,
-          env_present: {
-            PROXY: !!process.env.PROXY,
-            PROXY_HOST: !!process.env.PROXY_HOST,
-            PROXY_PORT: !!process.env.PROXY_PORT,
-            PROXY_USER: !!process.env.PROXY_USER,
-            PROXY_PASS: !!process.env.PROXY_PASS,
-            APIKEY: !!process.env.APIKEY,
-          },
-          via: 'v4-proxy-parts',
-        },
+        { error: `後端轉址（status ${res.status}${loc ? '，→ ' + loc : ''}）——代理未生效/未授權，或 x-api-key 無效` },
         { status: 502 },
       );
     }

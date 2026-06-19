@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   try {
     const { data, error } = await supabase()
       .from('admin_users')
-      .select('username, password_hash, must_change')
+      .select('username,password_hash,must_change')
       .eq('username', String(username))
       .maybeSingle();
     if (error) throw error;

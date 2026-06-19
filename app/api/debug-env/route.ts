@@ -5,11 +5,16 @@ import { supabase } from '@/lib/supabase';
 
 export async function GET() {
   const peek = (v?: string) => ({ set: !!v, len: v ? v.length : 0 });
+  const rawUrl = process.env.SUPABASE_URL || '';
   const env = {
-    SUPABASE_URL: peek(process.env.SUPABASE_URL),
+    // Project URL 本來就前端可見、非機密 —— 完整印出以排查格式
+    SUPABASE_URL_full: rawUrl,
+    SUPABASE_URL_len: rawUrl.length,
+    SUPABASE_URL_endsWithSlash: rawUrl.endsWith('/'),
+    SUPABASE_URL_hasPath: /supabase\.co\/.+/.test(rawUrl),
     SUPABASE_SERVICE_ROLE_KEY: peek(process.env.SUPABASE_SERVICE_ROLE_KEY),
+    SERVICE_KEY_prefix: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').slice(0, 6),
     JWT_SECRET: peek(process.env.JWT_SECRET),
-    url_prefix: (process.env.SUPABASE_URL || '').slice(0, 16),
   };
 
   // A) 計算總筆數

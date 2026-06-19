@@ -6,6 +6,10 @@
 //
 // Query：platform（逗號分隔或 ALL）、dateStart、dateEnd（yyyy-MM-dd）
 import { NextResponse } from 'next/server';
+import { fetch as undiciFetch, ProxyAgent } from 'undici';
+
+// 走 Node.js runtime（ProxyAgent 不支援 edge）
+export const runtime = 'nodejs';
 
 const BACKEND = (process.env.STATS_BACKEND_URL || 'https://stats-crawler.up.railway.app').replace(/\/+$/, '');
 
@@ -27,11 +31,16 @@ export async function GET(req: Request) {
   const qs = new URLSearchParams({ platform, dateStart, dateEnd }).toString();
   const url = `${BACKEND}/api/open/lottery-analysis?${qs}`;
 
+  // 後端 ipGuard 只放行特定代理 IP —— 透過 PROXY 指定的代理發送
+  const proxy = process.env.PROXY;
+  const dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
+
   try {
-    const res = await fetch(url, {
+    const res = await undiciFetch(url, {
       method: 'GET',
       headers: { 'x-api-key': apiKey, 'Accept': 'application/json' },
       redirect: 'manual',
+      dispatcher,
     });
 
     // ipGuard 會把未授權來源 302 轉去 booking.com —— 偵測並回明確錯誤

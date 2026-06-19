@@ -1,24 +1,39 @@
 'use client';
 import { useState, useMemo, useEffect } from 'react';
 
-const LOGIN_URL = 'https://stats-crawler.up.railway.app/api/auth/login';
+// 自有登入（同源 Next.js route handler，見 app/api/auth/*）
+const LOGIN_URL = '/api/auth/login';
+const CHANGE_PASSWORD_URL = '/api/auth/change-password';
 const TOKEN_KEY = 'audit_jwt_token';
 const ALL_PLATFORMS = ["XH","LS","OL","XY","SH","YS","JY","HS","FB","SY","LY","MT","JD","ND","YD"];
+// 注意：資料查詢端點之後會改接新的資訊來源；目前這個自有 JWT 不被 stats-crawler 舊端點接受。
 const ENGINE_URLS: Record<string, string> = {
   A: 'https://stats-crawler.up.railway.app/api/query-user-lottery-analysis',
   B: 'https://stats-crawler.up.railway.app/api/query-member-income',
 };
 
-function isTokenExpired(token: string): boolean {
+// 解 JWT payload（三段式 header.payload.sig，取中間段 base64url 解碼）
+function decodeJwt(token: string): any {
   try {
-    const payload = JSON.parse(atob(token));
-    const exp = payload.exp;
-    if (!exp) return false;
-    const expMs = exp > 1e12 ? exp : exp * 1000;
-    return Date.now() > expMs;
+    const part = token.split('.')[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const json = decodeURIComponent(
+      atob(b64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+    );
+    return JSON.parse(json);
   } catch {
-    return true;
+    return null;
   }
+}
+
+function isTokenExpired(token: string): boolean {
+  const payload = decodeJwt(token);
+  if (!payload) return true;
+  const exp = payload.exp;
+  if (!exp) return false;
+  const expMs = exp > 1e12 ? exp : exp * 1000;
+  return Date.now() > expMs;
 }
 
 // 處理後台可能回傳帶逗號的字串數字，例如 "53,684.13"
@@ -138,6 +153,14 @@ export default function AuditDashboard() {
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
 
+  // 強制改密（首登預設密碼）相關狀態
+  const [mustChange, setMustChange] = useState(false);
+  const [oldPassForChange, setOldPassForChange] = useState('');
+  const [cpNew, setCpNew] = useState('');
+  const [cpConfirm, setCpConfirm] = useState('');
+  const [cpError, setCpError] = useState('');
+  const [cpLoading, setCpLoading] = useState(false);
+
   const today = new Date();
   const fiveDaysAgo = new Date(today);
   fiveDaysAgo.setDate(today.getDate() - 5);
@@ -250,7 +273,16 @@ export default function AuditDashboard() {
 
   useEffect(() => {
     const saved = sessionStorage.getItem(TOKEN_KEY);
-    if (saved && !isTokenExpired(saved)) setToken(saved);
+    if (saved && !isTokenExpired(saved)) {
+      // 「強制改密」的 token 不靠 F5 恢復 session —— 否則重整就能繞過改密。
+      // 一律踢回登入頁，讓使用者重輸預設密碼（改密表單需要舊密碼）後再走改密流程。
+      const p = decodeJwt(saved);
+      if (p?.must_change === true) {
+        sessionStorage.removeItem(TOKEN_KEY);
+      } else {
+        setToken(saved);
+      }
+    }
   }, []);
 
   const handleLogin = async () => {
@@ -263,14 +295,49 @@ export default function AuditDashboard() {
         body: JSON.stringify({ username: loginUser, password: loginPass }),
       });
       const data = await res.json();
-      const jwt = data.token || data.data?.token || data.accessToken;
+      const jwt = data.token;
       if (!jwt) throw new Error(data.message || '登入失敗，請確認帳號密碼');
       sessionStorage.setItem(TOKEN_KEY, jwt);
       setToken(jwt);
+      // 首登預設密碼 → 強制改密
+      if (data.must_change === true) {
+        setOldPassForChange(loginPass);
+        setMustChange(true);
+      }
+      setLoginPass('');
     } catch (e: any) {
       setLoginError(e.message);
     } finally {
       setLoginLoading(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    setCpError('');
+    if (!cpNew || cpNew.length < 6) { setCpError('新密碼至少 6 位'); return; }
+    if (cpNew !== cpConfirm) { setCpError('兩次密碼不一致'); return; }
+    if (cpNew === oldPassForChange) { setCpError('新密碼不能跟舊密碼一樣'); return; }
+    setCpLoading(true);
+    try {
+      const res = await fetch(CHANGE_PASSWORD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ username: loginUser, old_password: oldPassForChange, new_password: cpNew }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || `修改失敗 (${res.status})`);
+      // 改完密碼：清掉舊 token，要求用新密碼重新登入
+      sessionStorage.removeItem(TOKEN_KEY);
+      setToken('');
+      setMustChange(false);
+      setOldPassForChange('');
+      setCpNew('');
+      setCpConfirm('');
+      alert('✅ 密碼修改成功，請用新密碼重新登入。');
+    } catch (e: any) {
+      setCpError(e.message);
+    } finally {
+      setCpLoading(false);
     }
   };
 
@@ -285,6 +352,25 @@ export default function AuditDashboard() {
           {loginError && <p className="text-red-500 text-sm mb-3">{loginError}</p>}
           <button onClick={handleLogin} disabled={loginLoading} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50">
             {loginLoading ? '登入中...' : '登入'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 首登強制改密（預設密碼必須改掉才能進系統）
+  if (mustChange) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-100">
+        <div className="bg-white rounded-lg shadow-lg p-8 w-80">
+          <h2 className="text-xl font-bold mb-2 text-center text-amber-600">🔐 首次登入，請修改密碼</h2>
+          <p className="text-xs text-gray-500 mb-4 text-center">預設密碼必須修改後才能使用系統</p>
+          <input className="w-full border p-2 rounded mb-3" type="password" placeholder="新密碼（至少 6 位）" value={cpNew} onChange={e => setCpNew(e.target.value)} />
+          <input className="w-full border p-2 rounded mb-4" type="password" placeholder="確認新密碼" value={cpConfirm} onChange={e => setCpConfirm(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleChangePassword()} />
+          {cpError && <p className="text-red-500 text-sm mb-3">{cpError}</p>}
+          <button onClick={handleChangePassword} disabled={cpLoading} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50">
+            {cpLoading ? '修改中...' : '確認修改'}
           </button>
         </div>
       </div>

@@ -50,7 +50,8 @@ export async function GET(req: Request) {
         {
           error: `後端轉址（status ${res.status}${loc ? '，→ ' + loc : ''}）——代理未生效/未授權，或 x-api-key 無效`,
           proxy_set: !!proxy,
-          via: 'v2-proxy',
+          env_present: { PROXY: !!process.env.PROXY, APIKEY: !!process.env.APIKEY, SUPABASE_URL: !!process.env.SUPABASE_URL },
+          via: 'v3-proxy',
         },
         { status: 502 },
       );

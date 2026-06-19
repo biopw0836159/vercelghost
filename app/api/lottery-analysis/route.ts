@@ -47,7 +47,11 @@ export async function GET(req: Request) {
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location') || '';
       return NextResponse.json(
-        { error: `後端轉址（status ${res.status}${loc ? '，→ ' + loc : ''}）——可能 Vercel IP 未被後端授權，或 x-api-key 無效` },
+        {
+          error: `後端轉址（status ${res.status}${loc ? '，→ ' + loc : ''}）——代理未生效/未授權，或 x-api-key 無效`,
+          proxy_set: !!proxy,
+          via: 'v2-proxy',
+        },
         { status: 502 },
       );
     }

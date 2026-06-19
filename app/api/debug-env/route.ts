@@ -12,17 +12,33 @@ export async function GET() {
     url_prefix: (process.env.SUPABASE_URL || '').slice(0, 16),
   };
 
-  let dbTest: any;
+  // A) 計算總筆數
+  let countTest: any;
   try {
-    const { data, error, count } = await supabase()
+    const { error, count } = await supabase()
       .from('admin_users')
       .select('username', { count: 'exact', head: true });
-    dbTest = error
-      ? { ok: false, error: error.message, code: (error as any).code, hint: (error as any).hint }
-      : { ok: true, count, sample: data };
+    countTest = error
+      ? { ok: false, error: error.message, code: (error as any).code }
+      : { ok: true, count };
   } catch (e) {
-    dbTest = { ok: false, threw: (e as Error).message };
+    countTest = { ok: false, threw: (e as Error).message };
   }
 
-  return NextResponse.json({ env, dbTest });
+  // B) 跟 login 完全一樣的查詢（用 shane 試），把真正的錯誤吐出來
+  let loginQueryTest: any;
+  try {
+    const { data, error } = await supabase()
+      .from('admin_users')
+      .select('username, password_hash, must_change')
+      .eq('username', 'shane')
+      .maybeSingle();
+    loginQueryTest = error
+      ? { ok: false, error: error.message, code: (error as any).code, hint: (error as any).hint }
+      : { ok: true, found: !!data, must_change: data?.must_change, hash_len: data?.password_hash?.length ?? null };
+  } catch (e) {
+    loginQueryTest = { ok: false, threw: (e as Error).message };
+  }
+
+  return NextResponse.json({ env, countTest, loginQueryTest });
 }

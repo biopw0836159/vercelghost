@@ -2,6 +2,24 @@
 
 原本这个专案是丢 Vercel 的（仓库名 `vercelghost` 就是这么来的），现在改用 Railway。
 
+## 现况（2026-08-14 上线）
+
+| 项目 | 值 |
+|---|---|
+| 网址 | https://zhuagui-web-production.up.railway.app |
+| Railway 专案 / 服务 | `zhuagui` / `zhuagui-web` |
+| 部署来源 | GitHub `biopw0836159/vercelghost` 的 `main` 分支 |
+| 白名单 `ALLOWED_IPS` | `52.192.113.75`（即授权代理的出口 IP） |
+
+**进站方式：浏览器必须挂 `52.192.113.75` 那个代理**，直连一定看到 403。
+这是刻意的设定，不是故障 —— 白名单目前只放行代理出口。
+
+上线当天实测：直连 403、走代理 200、走代理打 A 引擎拿到 8/13 的 563 笔
+（18 个平台、投注合计 242,523,019.35）。
+
+家用宽带那种浮动 IP 没有加进白名单，因为它会变。要加的话，403 页面上会直接
+显示当下的来源 IP，把它加进 `ALLOWED_IPS` 即可。
+
 ## 一、专案设定
 
 Railway → New Project → Deploy from GitHub repo → 选 `biopw0836159/vercelghost`。
@@ -60,10 +78,25 @@ Next 16 把 `middleware` 改名成 `proxy`，档案要放专案根目录、与 `
 Railway 的对外 IP 不固定，所以不能靠把 IP 加白名单解决，**必须走 `PROXY_*`**。
 如果部署后查询一直报「後端轉址（status 302…）」，就是代理变量没设或设错，不是后端挂了。
 
+## 三之二、Railway 重新部署的坑
+
+`serviceInstanceDeployV2` 触发重部署时，用的是**服务当前记录的 commit，不会自动拉最新**。
+上线当天就踩到：修好 healthcheck 后 push，但重部署仍在跑旧 commit，连失败两次。
+
+要部署最新版，得显式带 `commitSha`：
+
+```graphql
+mutation($eid: String!, $sid: String!, $sha: String!) {
+  serviceInstanceDeployV2(environmentId: $eid, serviceId: $sid, commitSha: $sha)
+}
+```
+
+另外，**部署失败后 Railway 不会自动重试**，得手动再触发一次。
+
 ## 四、部署后自我检查
 
 1. 开首页
-   - 看到 403 且显示你的 IP → 把那个 IP 加进 `ALLOWED_IPS`
+   - 看到 403 且显示你的 IP → 浏览器没挂代理（正常情况），或需要把该 IP 加进 `ALLOWED_IPS`
    - 看到主介面 → 白名单正确
 2. A 引擎选昨天日期、平台留 `ALL` → 按执行查询
    - 正常：约 500～600 笔（18 个平台 × 各自彩种）

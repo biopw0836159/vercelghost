@@ -151,6 +151,8 @@ export async function GET(req: Request) {
   }
 
   const platformParam = (searchParams.get('platform') || '').trim();
+  // 查彩種/期號要拉全量、動輒數分鐘，非串流會被 Railway 閘道 300 秒切斷
+  const wantStream = searchParams.get('stream') === '1';
 
   // 彙總後的結果不大（幾十 KB），但拉明細本身要好幾秒，同條件重複查直接給快取
   const cacheKey = `member-bets|${username}|${lottery}|${cycleValue}|${dateStart}|${dateEnd}|${shiftFilter}|${platformParam}`;
@@ -271,13 +273,8 @@ export async function GET(req: Request) {
     }
   };
 
-  // 串流拉取：一頁一頁進來就地彙總，不累積原始行 → 翻幾百頁記憶體都不會爆
-  const stream = await streamBetOrders(
-    { platforms: plats, dateStart, dateEnd, username: username || undefined },
-    (batch) => { for (const raw of batch) consume(normalizeC(raw)); },
-  );
-  if (!stream.ok) return NextResponse.json({ error: stream.error }, { status: stream.status });
-
+  // 把彙總結果組成回應，串流模式與一般模式共用
+  const buildPayload = (stream: { pages: number; records: number; bytes: number; truncated: boolean; capMessage: string }) => {
   const byMember = [...members.values()]
     .map(m => ({
       username: m.username,
@@ -382,7 +379,56 @@ export async function GET(req: Request) {
     byIp,
     sample: sampleRows,
   };
+  return payload;
+  };
 
+  // ── 串流模式 ──
+  // Railway 閘道 300 秒沒有資料就切斷（實測查彩種要 9 分鐘，直接 502 upstream error）。
+  // 查彩種/期號得把該平台整天的注單拉完才準，時間省不掉，所以改成邊拉邊回報進度：
+  // 連線持續有資料流動就不會被切，使用者也看得到跑到哪。
+  // 回應是 NDJSON，一行一個物件：{type:'progress'|'result'|'error'}
+  if (wantStream) {
+    const encoder = new TextEncoder();
+    const rs = new ReadableStream({
+      async start(controller) {
+        const send = (o: unknown) => controller.enqueue(encoder.encode(JSON.stringify(o) + '\n'));
+        try {
+          send({ type: 'progress', pages: 0, records: 0, counted: 0 });
+          const st = await streamBetOrders(
+            { platforms: plats, dateStart, dateEnd, username: username || undefined },
+            (batch, p) => {
+              for (const raw of batch) consume(normalizeC(raw));
+              send({ type: 'progress', pages: p.pages, records: p.records, counted });
+            },
+          );
+          if (!st.ok) { send({ type: 'error', error: st.error }); controller.close(); return; }
+          const payload = buildPayload(st);
+          cacheSet(cacheKey, payload, ttlFor(dateEnd));
+          send({ type: 'result', ...payload });
+        } catch (e) {
+          send({ type: 'error', error: (e as Error).message });
+        }
+        controller.close();
+      },
+    });
+    return new Response(rs, {
+      headers: {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+        'cache-control': 'no-store, no-transform',
+        // 告訴前面的反向代理不要緩衝，否則進度訊息會被攢著一起送、失去保活效果
+        'x-accel-buffering': 'no',
+      },
+    });
+  }
+
+  // ── 一般模式（查會員很快，不需要串流）──
+  const stream = await streamBetOrders(
+    { platforms: plats, dateStart, dateEnd, username: username || undefined },
+    (batch) => { for (const raw of batch) consume(normalizeC(raw)); },
+  );
+  if (!stream.ok) return NextResponse.json({ error: stream.error }, { status: stream.status });
+
+  const payload = buildPayload(stream);
   cacheSet(cacheKey, payload, ttlFor(dateEnd));
   return NextResponse.json(payload, { headers: { 'x-cache': 'MISS' } });
 }

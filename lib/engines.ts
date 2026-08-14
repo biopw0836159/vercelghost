@@ -138,7 +138,7 @@ export async function streamBetOrders(
     username?: string;
     maxPages?: number;
   },
-  onBatch: (rows: BetOrder[]) => void,
+  onBatch: (rows: BetOrder[], progress: { pages: number; records: number }) => void,
 ): Promise<StreamResult> {
   const { platforms, dateStart, dateEnd, username, maxPages = 2000 } = params;
 
@@ -167,7 +167,7 @@ export async function streamBetOrders(
     const d = r.data as { records?: BetOrder[]; hasMore?: boolean; nextCursor?: unknown; capMessage?: string };
     const page = d.records ?? [];
     records += page.length;
-    if (page.length) onBatch(page);
+    if (page.length) onBatch(page, { pages, records });
     if (d.capMessage) capMessage = String(d.capMessage);
 
     if (!d.hasMore || !d.nextCursor) break;

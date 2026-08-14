@@ -101,6 +101,7 @@ export default function AuditDashboard() {
   const [deepLottery, setDeepLottery] = useState('');
   const [deepCycle, setDeepCycle] = useState('');
   const [deepResult, setDeepResult] = useState<any>(null);
+  const [deepProgress, setDeepProgress] = useState<{ pages: number; records: number; counted: number } | null>(null);
 
   type SortCol = 'bets' | 'betAmount' | 'winAmount' | 'memberProfit' | 'rtp';
   type SortState = { col: SortCol; dir: 'asc' | 'desc' } | null;
@@ -179,6 +180,9 @@ export default function AuditDashboard() {
     setSortBy(null);
     setHasQueried(true);
     setDeepResult(null);
+    setDeepProgress(null);
+    setEnrichData(null);
+    setEnrichNote('');
     // 把當下側邊欄的條件「凍結」成套用版本，這之後再勾選也不會影響表格
     setAppliedFiltersA(filtersA);
     try {
@@ -233,11 +237,40 @@ export default function AuditDashboard() {
       if (deepCycle.trim()) bq.set('cycleValue', deepCycle.trim());
       if (deepShift) bq.set('shift', deepShift);
       if (deepPlatform.trim()) bq.set('platform', deepPlatform.trim());
-      const res = await fetch(`/api/member-bets?${bq.toString()}`, { headers: { Accept: 'application/json' } });
-      const json = await res.json();
-      if (!res.ok || json?.error) {
-        throw new Error(json?.error || `連線異常 (${res.status})`);
+      // 查彩種/期號要把該平台整段期間的注單拉完才準，動輒數分鐘，
+      // 非串流會被 Railway 閘道 300 秒切斷（502）。所以這種查詢改走串流：
+      // 邊拉邊回報進度，連線持續有資料就不會被切。查帳號很快，走一般模式即可。
+      const needStream = !deepUser.trim();
+      let json: any;
+
+      if (needStream) {
+        bq.set('stream', '1');
+        const res = await fetch(`/api/member-bets?${bq.toString()}`);
+        if (!res.ok || !res.body) throw new Error(`連線異常 (${res.status})`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const obj = JSON.parse(line);
+            if (obj.type === 'progress') setDeepProgress({ pages: obj.pages, records: obj.records, counted: obj.counted });
+            else if (obj.type === 'error') throw new Error(obj.error);
+            else if (obj.type === 'result') json = obj;
+          }
+        }
+        if (!json) throw new Error('串流結束但沒有拿到結果');
+      } else {
+        const res = await fetch(`/api/member-bets?${bq.toString()}`, { headers: { Accept: 'application/json' } });
+        json = await res.json();
+        if (!res.ok || json?.error) throw new Error(json?.error || `連線異常 (${res.status})`);
       }
+
       setDeepResult(json);
       setRawCount(json.summary?.records ?? 0);
       if (json.sample?.length) setRawSample(json.sample[0]);
@@ -527,6 +560,18 @@ export default function AuditDashboard() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* 串流進度：查彩種/期號要拉全量，讓人看得到跑到哪，而不是對著轉圈猜 */}
+        {loading && deepProgress && (
+          <div className="bg-blue-50 border border-blue-300 rounded p-3 mb-4 text-sm font-mono">
+            <div className="font-bold text-blue-800 mb-1">⏳ 拉取中（資料不設上限，翻頁翻到底）</div>
+            <div>已翻 <b>{deepProgress.pages}</b> 頁　源頭 <b>{deepProgress.records.toLocaleString()}</b> 筆
+              符合條件 <b>{deepProgress.counted.toLocaleString()}</b> 筆</div>
+            <div className="text-xs text-gray-600 mt-1">
+              C 引擎沒有彩種/期號參數，只能拉完再本地精確比對 —— 慢，但不會串到別的彩種、也不會少資料。
+            </div>
           </div>
         )}
 

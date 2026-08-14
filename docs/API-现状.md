@@ -17,21 +17,69 @@
 
 ## 二、端点实测总表
 
-| 端点 | 状态 | 8/12 实测 |
-|---|---|---|
-| `/api/open/lottery-stats?platform=ALL` | ✅ 可用，**目前最可靠** | 572 笔（18 平台 × 彩种），投注额 238,330,524.11 |
-| `/api/open/external-game-stats?platform=ALL` | ✅ 可用 | 183 笔外接游戏 |
-| `/api/v1/member-bets` | ⚠️ 可用但有硬限制 | 见第四节 |
-| `/api/open/lottery-analysis?platform=ALL` | ❌ **数字不可信** | 见第三节 |
-| `/api/open/member-income?platform=ALL` | ❌ **永远回 0 笔** | 见第三节 |
-| `/api/v1/profit-loss` | ❌ 404 不存在 | — |
-| `/api/v1/tx-records` | ❌ 404 不存在 | — |
-| `/api/v1/member-overview` | ❌ 404 不存在 | — |
+> ⚠️ **2026-08-14 重要更正**：本节最初把 `/api/v1/profit-loss` 记成「404 不存在」，
+> 那是**用 GET 测试造成的误判 —— 它是 POST**。同一把 `APIKEY` 就能用，资料完整。
+> 连带更正的还有「B 引擎没资料」「注单无分页」两条，详见第二之二节。
 
-参数格式两套并存，不要搞混：
+| 端点 | 方法 | 状态 | 8/12 实测 |
+|---|---|---|---|
+| `/api/query-bet-orders` | **POST** | ✅ **C 引擎，注单首选** | 每页 5000 笔，cursor 分页 |
+| `/api/v1/profit-loss` | **POST** | ✅ **B 引擎，会员盈亏** | 含充值/返点/工资 + 代理树 |
+| `/api/open/lottery-stats?platform=ALL` | GET | ✅ 可用，A 引擎在吃 | 572 笔（18 平台 × 彩种），投注额 238,330,524.11 |
+| `/api/v1/new-members` | POST | ✅ 可用 | 含奖金号、首充、最后登入 IP |
+| `/api/open/external-game-stats?platform=ALL` | GET | ✅ 可用 | 183 笔外接游戏 |
+| `/api/v1/member-bets` | GET | ⚠️ 可用但有硬限制 | 1 万笔上限且无分页，见第四节 |
+| `/api/open/lottery-analysis?platform=ALL` | GET | ❌ **数字不可信** | 见第三节 |
+| `/api/open/member-income?platform=ALL` | GET | ❌ **永远回 0 笔** | 已被 B 引擎取代，见第三节 |
 
-- `/api/open/*` 用小驼峰：`platform`、`dateStart`、`dateEnd`，`platform` **必填**（可传 `ALL`）
-- `/api/v1/*` 用底线：`date_start`、`date_end`
+参数格式三套并存，不要搞混：
+
+- `/api/open/*`（GET）用小驼峰：`platform`、`dateStart`、`dateEnd`，`platform` **必填**（可传 `ALL`）
+- `/api/v1/member-bets`（GET）用底线：`date_start`、`date_end`
+- **POST 系列**（`query-bet-orders` / `profit-loss` / `new-members`）用 JSON body，小驼峰
+
+## 二之二、B / C 引擎（本站现在的主力）
+
+### C 引擎 `POST /api/query-bet-orders` —— 注单明细
+
+```json
+{ "platforms": ["OL"], "dateStart": "2026-08-12", "dateEnd": "2026-08-12",
+  "username": "hmhm777", "limit": 5000, "cursor": null }
+```
+
+- **`platforms` 必填**：省略、空阵列、`['ALL']` 都拿不到东西（前两者回 400，`ALL` 回 0 笔）。
+  本站不写死清单，从 `lottery-stats` 当期实际有资料的平台推导（平台会增减，TD 就是 2026-08 才加的）。
+- **每页上限 5000 笔，靠 `nextCursor` 翻页**（`hasMore` 判断有无下一页）。实测翻 6 页 3 万笔零重复。
+- **没有 `lottery` / `cycle_value` 参数** —— 查彩种或期号只能走旧的 `GET /api/v1/member-bets`。
+- 栏位比旧端点多 9 个，其中三个关键：
+  `real_earn`（后端算好的真实盈亏）、`bet_content`（投注内容号码）、`open_code`（开奖号）。
+- **判中奖要看 `status_str`，不能用 `win_count`** —— 实测 772 笔的 `win_count` 全是 0，
+  而 `status_str` 分布 `NOPRIZE 609 / WIN 160 / CANCEL 3`，与旧端点 `state` 完全一致。
+- 源头把 **CANCEL 撤单也算进投注额**（8/12 hmhm777 有 3 笔、330.00）。本站照源头不动，另外标出笔数金额。
+
+### B 引擎 `POST /api/v1/profit-loss` —— 会员盈亏
+
+```json
+{ "platform": "OL", "loginId": "hmhm777", "kind": "total",
+  "periods": ["today", "month", "lifetime"] }
+```
+
+`personal` / `team` 各回 10 栏，**抓鬼五条规则要的全在这里**：
+
+```
+bet(销量)  prize(奖金)  returnPoint(返点)  activity(工资)  profit(盈亏，会员视角)
+recharge(充值)  withdrawal(提款)  bonus(红利)  depositProfit  proportionalBonus
+```
+
+另附 `allAscendants` 代理树（实测 `MERCHANT_REPORT > ol2022 > ybnihao777 > fc999888 > hmhm888`）。
+
+两个硬限制：
+
+1. **只能逐个会员查** —— `loginIds` 阵列、不带 `loginId` 都回 400。实测约 1 秒/人，
+   所以 `/api/member-enrich` 限量 30 人 + 并发 6。
+2. **只有 `today` / `month` / `lifetime` 三个窗口，不吃任意日期区间。**
+   查历史日期的注单时，这里补回来的是「今天/本月」的数字，**对应不到那一天**，
+   介面上必须显眼标示，不能让人误以为是查询日的数据。
 
 ### 平台清单：18 个
 
@@ -79,7 +127,11 @@ XO  XY  OL  XH  LS  ND  RF  TD  HS  YD  JY  MT  SH  YS  JD  FB  SY  LY
 > **处置**：A 引擎改吃 `lottery-stats`（它多了「平台」「人数」两个栏位，反而更适合抓鬼）。
 > `lottery-analysis` 在后端查清楚之前不要用。
 
-### 2. `member-income` —— B 引擎的唯一数据源，永远空
+### 2. `member-income` —— 永远空，但已经不重要了
+
+> **2026-08-14 更正**：这支确实永远回 0 笔，但它**不是** B 引擎的唯一数据源 ——
+> 真正的 B 引擎是 `POST /api/v1/profit-loss`（见第二之二节），资料完整且一直可用。
+> 本站已改用 profit-loss，五条抓鬼规则也随之恢复。这支就当作废弃，不必再等后端修。
 
 `HTTP 200` 但 `0 笔`，试过全部组合都一样：
 
@@ -225,7 +277,19 @@ state, state_code, bet_time
 > 这代表**不能用逐日拆分来重建多日数字**。也因此逐日并行加速的方案被否决 ——
 > 实测并行 7 天反而要 48.5 秒，比一次查的 7.9 秒更慢。
 
-## 五之二、B 引擎原五条规则（暂时下架，等 member-income 修好要接回来）
+## 五之二、B 引擎五条规则（2026-08-14 已恢复）
+
+> 改吃 `POST /api/v1/profit-loss` 之后这五条已经恢复，做在 `/api/member-enrich`：
+> 对表格里的会员逐个补 B 引擎资料再套规则，门槛全部可在介面调整、留空即不启用。
+> 实测 8/12 用 month 窗口跑，`MT/zql555888` 命中「高返点 + 大额盈利」
+> （销量 1,285,985.96、充值 436,660.77、充销比 2.95）。
+>
+> 栏位对应：销量=`bet`、充值=`recharge`、返点=`returnPoint`、工资=`activity`、
+> 盈亏=`profit`（会员视角，正 = 会员赢）、充销比=`bet / recharge`。
+>
+> ⚠ 窗口只有 today/month/lifetime，查历史日期时这些数字对应不到那一天。
+
+以下为规则原始定义（保留备查）：
 
 B 引擎已改成「定向深查」，原本这五条建在 `member-income` 上的规则先从介面移除。
 规则定义记录在这里，后端修好后照这个恢复（栏位来自 member-income：
@@ -245,6 +309,11 @@ B 引擎已改成「定向深查」，原本这五条建在 `member-income` 上�
 若它不含充值栏位，这三条仍然要靠 `tx-records`（见第六节第 2 点）。
 
 ## 六、要请后端补的东西（可直接转给后端）
+
+> **2026-08-14 更新**：原本列的 9 条里，第 1 条（修 `member-income`）已经不需要 ——
+> 改用 B 引擎 `profit-loss` 就解决了。第 3 条（`member-bets` 加分页）也不需要 ——
+> C 引擎 `query-bet-orders` 本来就有 cursor 分页。
+> 真正还需要后端处理的是下面第 2、4～9 条。
 
 按重要性排序：
 

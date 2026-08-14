@@ -6,6 +6,7 @@
 // 简单说 lottery-analysis 对 XO/XY/OL/XH/LS 五个平台回 0，金额与本端点差 4000 倍以上。
 import { NextResponse } from 'next/server';
 import { fetchOpenApi } from '@/lib/open-api';
+import { cacheGet, cacheSet, ttlFor } from '@/lib/cache';
 
 export const runtime = 'nodejs';
 
@@ -19,7 +20,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: '必須提供 dateStart 與 dateEnd' }, { status: 400 });
   }
 
+  // 後端這支單日要 6 秒、7 天要 20 秒以上，同一組條件重複查沒必要再等一次
+  const key = `lottery-stats|${platform}|${dateStart}|${dateEnd}`;
+  const cached = cacheGet<unknown[]>(key);
+  if (cached) return NextResponse.json(cached, { headers: { 'x-cache': 'HIT' } });
+
   const r = await fetchOpenApi('/api/open/lottery-stats', { platform, dateStart, dateEnd });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
-  return NextResponse.json(r.rows);
+
+  cacheSet(key, r.rows, ttlFor(dateEnd));
+  return NextResponse.json(r.rows, { headers: { 'x-cache': 'MISS' } });
 }

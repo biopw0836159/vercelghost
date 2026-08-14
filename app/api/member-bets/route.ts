@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server';
 import { fetchOpenApiLarge } from '@/lib/open-api';
 import { isDatacenterIp } from '@/lib/ip-class';
+import { cacheGet, cacheSet, ttlFor } from '@/lib/cache';
 
 export const runtime = 'nodejs';
 
@@ -55,6 +56,11 @@ export async function GET(req: Request) {
       { status: 400 },
     );
   }
+
+  // 彙總後的結果不大（幾十 KB），但拉明細本身要好幾秒，同條件重複查直接給快取
+  const cacheKey = `member-bets|${username}|${lottery}|${cycleValue}|${dateStart}|${dateEnd}`;
+  const cached = cacheGet<unknown>(cacheKey);
+  if (cached) return NextResponse.json(cached, { headers: { 'x-cache': 'HIT' } });
 
   const params: Record<string, string> = { date_start: dateStart, date_end: dateEnd };
   if (username) params.username = username;
@@ -168,6 +174,18 @@ export async function GET(req: Request) {
     }))
     .sort((a, b) => b.memberCount - a.memberCount);
 
+  // ── 彩種串號偵測 ──
+  // 後端的 lottery 參數會把「帶編號」的名稱映射到別的彩種（實測 排列五(15) → 排列三五、
+  // QQ分分彩(218) → QQ分分彩），而且 lottery-stats 與明細之間還有簡繁字差異（经/經）。
+  // 只要回來的彩種名跟查詢名對不上，這批數字就不能當成「該彩種」的數字用。
+  let lotteryWarning: { queried: string; actual: string[] } | null = null;
+  if (lottery) {
+    const actual = [...new Set(r.rows.map((b: Record<string, unknown>) => String(b.lottery ?? '')).filter(Boolean))];
+    if (actual.length !== 1 || actual[0] !== lottery) {
+      lotteryWarning = { queried: lottery, actual };
+    }
+  }
+
   const SHIFT_ORDER: Record<string, number> = { 早: 0, 中: 1, 晚: 2 };
   const byShift = [...shifts.values()]
     .map(s => ({
@@ -185,7 +203,7 @@ export async function GET(req: Request) {
       ? (SHIFT_ORDER[a.shift] ?? 9) - (SHIFT_ORDER[b.shift] ?? 9)
       : a.date < b.date ? -1 : 1);
 
-  return NextResponse.json({
+  const payload = {
     summary: {
       records: r.rows.length,
       truncated: r.truncated,
@@ -200,11 +218,15 @@ export async function GET(req: Request) {
       // 班別切分用的時區偏移，以及沒有有效 bet_time 而無法歸班的筆數
       shiftTzOffsetHours: SHIFT_TZ_OFFSET_HOURS,
       recordsWithoutTime: noTime,
+      lotteryWarning,
       query: { username, lottery, cycleValue, dateStart, dateEnd },
     },
     byShift,
     byMember,
     byIp,
     sample: r.rows.slice(0, SAMPLE_LIMIT),
-  });
+  };
+
+  cacheSet(cacheKey, payload, ttlFor(dateEnd));
+  return NextResponse.json(payload, { headers: { 'x-cache': 'MISS' } });
 }

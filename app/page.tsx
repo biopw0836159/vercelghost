@@ -264,6 +264,24 @@ export default function AuditDashboard() {
           <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="w-full border p-1 rounded mb-2 text-black" />
           <label className="block text-sm font-medium mb-1">Date End</label>
           <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="w-full border p-1 rounded text-black" />
+          {/* 後端一天的邊界在當地時間 11:00 左右，不是 00:00 —— 只查單日會少掉早班前段 */}
+          {dateStart === dateEnd && (
+            <div className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded p-1.5 leading-relaxed">
+              ⚠️ 只查一天會缺一段。後端一天的邊界在當地時間 <b>11:00</b> 左右（不是 00:00），
+              查單日拿到的是「當天 11:00 ～ 隔天 11:00」，早班 08:00–11:00 那段會落在前一天。
+              <button
+                type="button"
+                onClick={() => {
+                  const d = new Date(dateEnd + 'T00:00:00Z');
+                  d.setUTCDate(d.getUTCDate() - 1);
+                  setDateStart(d.toISOString().slice(0, 10));
+                }}
+                className="mt-1 block text-blue-600 hover:text-blue-800 underline font-medium"
+              >
+                把開始日期往前推一天（湊齊完整自然日）
+              </button>
+            </div>
+          )}
           {hasQueried && activeEngine === 'A'
             && JSON.stringify(filtersA) !== JSON.stringify(appliedFiltersA) && (
             <div className="mt-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded p-1.5 font-medium">
@@ -331,6 +349,17 @@ export default function AuditDashboard() {
                   <div className="mt-2 p-2 bg-red-100 border border-red-400 rounded text-red-700 font-bold">
                     ⚠️ 撞到後端 10000 筆上限，這批資料<b>不完整</b>，上面的金額全部偏低。
                     請縮短日期區間、或改查單一會員帳號。
+                  </div>
+                )}
+                {deepResult.summary.lotteryWarning && (
+                  <div className="mt-2 p-2 bg-red-100 border border-red-400 rounded text-red-700">
+                    <b>⚠️ 彩種對不上，這批數字不能當成「{deepResult.summary.lotteryWarning.queried}」的數字用。</b>
+                    <div className="mt-1 font-normal">
+                      你查的是「{deepResult.summary.lotteryWarning.queried}」，後端實際回的是
+                      「{deepResult.summary.lotteryWarning.actual.join('」、「') || '（空）'}」。
+                      後端的 lottery 參數會把帶編號的名稱映射到別的彩種，而且彩種統計與注單明細之間還有簡繁字差異。
+                      要準確的數字請<b>改查會員帳號</b>。
+                    </div>
                   </div>
                 )}
               </>

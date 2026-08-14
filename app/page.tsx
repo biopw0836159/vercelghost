@@ -264,24 +264,16 @@ export default function AuditDashboard() {
           <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="w-full border p-1 rounded mb-2 text-black" />
           <label className="block text-sm font-medium mb-1">Date End</label>
           <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="w-full border p-1 rounded text-black" />
-          {/* 後端一天的邊界在當地時間 03:00 左右，不是 00:00 —— 只查單日會少掉晚班前段 */}
-          {dateStart === dateEnd && (
-            <div className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded p-1.5 leading-relaxed">
-              ⚠️ 只查一天會缺一段。後端一天的邊界在當地時間 <b>03:00</b> 左右（不是 00:00），
-              查單日拿到的是「當天 03:00 ～ 隔天 03:00」，晚班 00:00–03:00 那段會落在前一天。
-              <button
-                type="button"
-                onClick={() => {
-                  const d = new Date(dateEnd + 'T00:00:00Z');
-                  d.setUTCDate(d.getUTCDate() - 1);
-                  setDateStart(d.toISOString().slice(0, 10));
-                }}
-                className="mt-1 block text-blue-600 hover:text-blue-800 underline font-medium"
-              >
-                把開始日期往前推一天（湊齊完整自然日）
-              </button>
-            </div>
-          )}
+          {/* 如實說明源頭口徑，不替使用者湊自然日 —— 一切以源頭給什麼為準 */}
+          <div className="mt-2 text-xs text-gray-600 bg-gray-50 border border-gray-300 rounded p-1.5 leading-relaxed">
+            日期口徑照源頭：後端一天的邊界是當地時間 <b>03:00</b>（不是 00:00），
+            所以查 {dateStart === dateEnd ? '單日' : '這個區間'} 拿到的是
+            「{dateStart} 03:00 ～ {(() => {
+              const d = new Date(dateEnd + 'T00:00:00Z');
+              d.setUTCDate(d.getUTCDate() + 1);
+              return d.toISOString().slice(0, 10);
+            })()} 03:00」。
+          </div>
           {hasQueried && activeEngine === 'A'
             && JSON.stringify(filtersA) !== JSON.stringify(appliedFiltersA) && (
             <div className="mt-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded p-1.5 font-medium">
@@ -344,6 +336,9 @@ export default function AuditDashboard() {
                 <div>🔸 投注 <b>{fmtMoney(deepResult.summary.betAmount)}</b>　派彩 <b>{fmtMoney(deepResult.summary.winAmount)}</b>　莊家盈虧{' '}
                   <b className={deepResult.summary.housePnl >= 0 ? 'text-green-600' : 'text-red-600'}>{fmtMoney(deepResult.summary.housePnl)}</b>
                 </div>
+                {deepResult.summary.spanFirst && (
+                  <div>🔸 源頭實際涵蓋：<b>{deepResult.summary.spanFirst.slice(0, 19).replace('T', ' ')}</b> ～ <b>{deepResult.summary.spanLast.slice(0, 19).replace('T', ' ')}</b></div>
+                )}
                 <div className="text-xs text-gray-500">🔸 回應體 {(deepResult.summary.bytes / 1048576).toFixed(1)}MB</div>
                 {deepResult.summary.truncated && (
                   <div className="mt-2 p-2 bg-red-100 border border-red-400 rounded text-red-700 font-bold">
@@ -423,11 +418,10 @@ export default function AuditDashboard() {
             <div className="bg-white rounded-lg shadow border border-gray-200 p-4 mb-4">
               <div className="font-bold text-gray-700 mb-1">🕐 班別分布</div>
               <div className="text-xs text-gray-500 mb-3 leading-relaxed">
-                早 08:00–16:00、中 16:00–24:00、晚 00:00–08:00。
-                後端 <code>bet_time</code> 雖然標 <code>Z</code>，但實測存的是當地時間
-                （经典重庆时时彩字面值 10:01~次日 01:56，正是該彩種公認的開盤時段），
-                所以直接採用字面值{off !== 0 ? `，目前另外位移 ${off} 小時` : '、不做時區位移'}。
-                請對照最右邊的「實際時間範圍」確認切分正確。
+                早 08:00–16:00、中 16:00–24:00、晚 00:00–08:00，
+                直接用源頭 <code>bet_time</code> 的字面值切{off !== 0 ? `（另外位移 ${off} 小時）` : '，不做時區位移'}。
+                因為後端一天的邊界是當地 03:00，一次查詢會橫跨兩個日期，
+                所以下面按「日期 × 班別」分開列，如實呈現源頭給的範圍，不做湊整。
                 {deepResult.summary?.recordsWithoutTime > 0 && (
                   <span className="text-orange-600 font-medium">
                     　有 {deepResult.summary.recordsWithoutTime} 筆沒有有效時間，未歸入任何班別。

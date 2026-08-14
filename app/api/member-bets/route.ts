@@ -91,6 +91,9 @@ export async function GET(req: Request) {
   const ipMap = new Map<string, Set<string>>();
   const shifts = new Map<string, ShiftAgg>();
   let betAmount = 0, winAmount = 0, wins = 0, noTime = 0;
+  // 這批資料實際涵蓋的時間範圍 —— 後端一天的邊界不是 00:00，如實把範圍標出來，
+  // 不要替使用者湊自然日，一切以源頭給什麼為準。
+  let spanFirst = '', spanLast = '';
 
   for (const b of r.rows) {
     const u = String(b.username ?? '-');
@@ -98,6 +101,12 @@ export async function GET(req: Request) {
     const win = num(b.win_amount);
     const isWin = String(b.state ?? '').toUpperCase() === 'WIN';
     betAmount += amt; winAmount += win; if (isWin) wins++;
+
+    const bt = String(b.bet_time ?? '');
+    if (bt) {
+      if (!spanFirst || bt < spanFirst) spanFirst = bt;
+      if (!spanLast || bt > spanLast) spanLast = bt;
+    }
 
     // 班別彙總
     const sh = shiftOf(b.bet_time);
@@ -226,6 +235,9 @@ export async function GET(req: Request) {
       shiftTzOffsetHours: SHIFT_TZ_OFFSET_HOURS,
       recordsWithoutTime: noTime,
       lotteryWarning,
+      // 源頭這次實際給了哪一段（後端一天的邊界在當地 03:00，不是 00:00）
+      spanFirst,
+      spanLast,
       query: { username, lottery, cycleValue, dateStart, dateEnd },
     },
     byShift,

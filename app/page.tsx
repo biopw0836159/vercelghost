@@ -82,6 +82,8 @@ export default function AuditDashboard() {
   const [appliedFiltersA, setAppliedFiltersA] = useState(defaultFiltersA);
 
   // B 引擎（定向深查）：後端 member-bets 至少要指定一個對象，不能只給日期
+  // 時段篩選：空字串 = 全部時段。班別定義同下方 DeepInput 區的說明。
+  const [deepShift, setDeepShift] = useState('');
   const [deepUser, setDeepUser] = useState('');
   const [deepLottery, setDeepLottery] = useState('');
   const [deepCycle, setDeepCycle] = useState('');
@@ -216,6 +218,7 @@ export default function AuditDashboard() {
       if (deepUser.trim()) bq.set('username', deepUser.trim());
       if (deepLottery.trim()) bq.set('lottery', deepLottery.trim());
       if (deepCycle.trim()) bq.set('cycleValue', deepCycle.trim());
+      if (deepShift) bq.set('shift', deepShift);
       const res = await fetch(`/api/member-bets?${bq.toString()}`, { headers: { Accept: 'application/json' } });
       const json = await res.json();
       if (!res.ok || json?.error) {
@@ -306,6 +309,20 @@ export default function AuditDashboard() {
               後端 <code>member-income</code> 目前任何日期都回 0 筆，全站掃描的五條規則暫時下架
               （定義留在 docs/API-現狀.md）。這裡改成拉注單明細做定向深查。
             </div>
+            <div className="mb-3">
+              <label className="block text-sm font-medium mb-1 text-gray-700">時段</label>
+              <select value={deepShift} onChange={e => setDeepShift(e.target.value)}
+                className="w-full border p-2 rounded text-black bg-white">
+                <option value="">全部時段</option>
+                <option value="早">早班 08:00–16:00</option>
+                <option value="中">中班 16:00–24:00</option>
+                <option value="晚">晚班 00:00–08:00</option>
+              </select>
+              <div className="text-xs text-gray-500 mt-1 leading-relaxed">
+                在日期區間內再依班別篩選，只有選定時段的注單會計入統計。
+                班別用源頭 <code>bet_time</code> 的字面值判定，不做時區位移。
+              </div>
+            </div>
             <div className="text-xs text-gray-500 mb-2 px-1">下面三個至少填一個，不能只給日期</div>
             <DeepInput label="會員帳號" hint="例如 lh838366" value={deepUser} onChange={setDeepUser} />
             <DeepInput label="彩種" hint="例如 東京1.5分彩" value={deepLottery} onChange={setDeepLottery} />
@@ -332,7 +349,20 @@ export default function AuditDashboard() {
               </>
             ) : deepResult?.summary ? (
               <>
-                <div>🔸 注單筆數：<b>{deepResult.summary.records}</b>　會員 <b>{deepResult.summary.memberCount}</b> 人　IP <b>{deepResult.summary.ipCount}</b> 個</div>
+                <div>
+                  🔸 注單筆數：<b>{deepResult.summary.records}</b>　會員 <b>{deepResult.summary.memberCount}</b> 人　IP <b>{deepResult.summary.ipCount}</b> 個
+                  {deepResult.summary.shift && (
+                    <span className="ml-2 bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-bold">
+                      只計 {deepResult.summary.shift}班
+                    </span>
+                  )}
+                </div>
+                {deepResult.summary.shift && (
+                  <div className="text-xs text-gray-600">
+                    　 源頭這個區間共 {deepResult.summary.recordsFromSource} 筆，
+                    篩掉其他時段 {deepResult.summary.excludedByShift} 筆後計入 {deepResult.summary.records} 筆
+                  </div>
+                )}
                 <div>🔸 投注 <b>{fmtMoney(deepResult.summary.betAmount)}</b>　派彩 <b>{fmtMoney(deepResult.summary.winAmount)}</b>　莊家盈虧{' '}
                   <b className={deepResult.summary.housePnl >= 0 ? 'text-green-600' : 'text-red-600'}>{fmtMoney(deepResult.summary.housePnl)}</b>
                 </div>

@@ -53,6 +53,8 @@ export async function GET(req: Request) {
   const cycleValue = searchParams.get('cycleValue')?.trim() || '';
   const dateStart = searchParams.get('dateStart');
   const dateEnd = searchParams.get('dateEnd');
+  // 時段篩選：只算選定班別的注單。空字串 = 不篩、全部時段。
+  const shiftFilter = (searchParams.get('shift') || '').trim();
 
   if (!dateStart || !dateEnd) {
     return NextResponse.json({ error: '必須提供 dateStart 與 dateEnd' }, { status: 400 });
@@ -63,9 +65,12 @@ export async function GET(req: Request) {
       { status: 400 },
     );
   }
+  if (shiftFilter && !['早', '中', '晚'].includes(shiftFilter)) {
+    return NextResponse.json({ error: 'shift 只能是 早 / 中 / 晚，或不傳代表全部時段' }, { status: 400 });
+  }
 
   // 彙總後的結果不大（幾十 KB），但拉明細本身要好幾秒，同條件重複查直接給快取
-  const cacheKey = `member-bets|${username}|${lottery}|${cycleValue}|${dateStart}|${dateEnd}`;
+  const cacheKey = `member-bets|${username}|${lottery}|${cycleValue}|${dateStart}|${dateEnd}|${shiftFilter}`;
   const cached = cacheGet<unknown>(cacheKey);
   if (cached) return NextResponse.json(cached, { headers: { 'x-cache': 'HIT' } });
 
@@ -91,15 +96,26 @@ export async function GET(req: Request) {
   const ipMap = new Map<string, Set<string>>();
   const shifts = new Map<string, ShiftAgg>();
   let betAmount = 0, winAmount = 0, wins = 0, noTime = 0;
+  let counted = 0, excludedByShift = 0;
+  // 樣本只放實際計入統計的注單，篩掉的不能混進來
+  const sampleRows: Record<string, unknown>[] = [];
   // 這批資料實際涵蓋的時間範圍 —— 後端一天的邊界不是 00:00，如實把範圍標出來，
   // 不要替使用者湊自然日，一切以源頭給什麼為準。
   let spanFirst = '', spanLast = '';
 
   for (const b of r.rows) {
+    // 時段篩選要擺在所有彙總之前 —— 被篩掉的注單不能進任何統計
+    const sh = shiftOf(b.bet_time);
+    if (shiftFilter) {
+      if (!sh || sh.shift !== shiftFilter) { excludedByShift++; continue; }
+    }
+
     const u = String(b.username ?? '-');
     const amt = num(b.bet_amount);
     const win = num(b.win_amount);
     const isWin = String(b.state ?? '').toUpperCase() === 'WIN';
+    counted++;
+    if (sampleRows.length < SAMPLE_LIMIT) sampleRows.push(b);
     betAmount += amt; winAmount += win; if (isWin) wins++;
 
     const bt = String(b.bet_time ?? '');
@@ -109,7 +125,6 @@ export async function GET(req: Request) {
     }
 
     // 班別彙總
-    const sh = shiftOf(b.bet_time);
     if (!sh) {
       noTime++;
     } else {
@@ -196,7 +211,7 @@ export async function GET(req: Request) {
   // 只要回來的彩種名跟查詢名對不上，這批數字就不能當成「該彩種」的數字用。
   let lotteryWarning: { queried: string; actual: string[] } | null = null;
   if (lottery) {
-    const actual = [...new Set(r.rows.map((b: Record<string, unknown>) => String(b.lottery ?? '')).filter(Boolean))];
+    const actual = [...new Set([...members.values()].flatMap(m => [...m.lotteries]))];
     if (actual.length !== 1 || actual[0] !== lottery) {
       lotteryWarning = { queried: lottery, actual };
     }
@@ -221,7 +236,11 @@ export async function GET(req: Request) {
 
   const payload = {
     summary: {
-      records: r.rows.length,
+      // records 是「實際計入統計」的筆數；有做時段篩選時會小於源頭回傳的總筆數
+      records: counted,
+      recordsFromSource: r.rows.length,
+      shift: shiftFilter || null,
+      excludedByShift,
       truncated: r.truncated,
       bytes: r.bytes,
       memberCount: members.size,
@@ -238,12 +257,12 @@ export async function GET(req: Request) {
       // 源頭這次實際給了哪一段（後端一天的邊界在當地 03:00，不是 00:00）
       spanFirst,
       spanLast,
-      query: { username, lottery, cycleValue, dateStart, dateEnd },
+      query: { username, lottery, cycleValue, dateStart, dateEnd, shift: shiftFilter || null },
     },
     byShift,
     byMember,
     byIp,
-    sample: r.rows.slice(0, SAMPLE_LIMIT),
+    sample: sampleRows,
   };
 
   cacheSet(cacheKey, payload, ttlFor(dateEnd));

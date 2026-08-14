@@ -34,6 +34,9 @@ yarn-error.log*
 .env*
 !.env.local.example
 
+# 本機預覽用的繞登入入口 —— 等於一道沒鎖的後門，絕對不能進版控/上線
+public/_preview.html
+
 # vercel
 .vercel
 

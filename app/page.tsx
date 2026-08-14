@@ -41,16 +41,10 @@ const parseNum = (v: any): number => {
   return isNaN(n) ? 0 : n;
 };
 
-// 模糊搜尋 key (去除空白/底線/連字號，做小寫比對)
-const findField = (item: any, patterns: RegExp[]): any => {
-  for (const key of Object.keys(item)) {
-    const norm = key.replace(/[\s_\-]/g, '').toLowerCase();
-    for (const p of patterns) {
-      if (p.test(norm) || p.test(key)) return item[key];
-    }
-  }
-  return undefined;
-};
+// 金額顯示：千分位 + 固定兩位小數（後端浮點尾數如 13685.289999999999 直接印出來很難讀）
+const fmtMoney = (v: number) => (Number.isFinite(v) ? v : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// RTP 顯示到小數第 4 位（後端只給 3 位，我們自己算的精度更高）
+const fmtRtp = (v: number) => (Number.isFinite(v) ? v : 0).toFixed(4);
 
 const FilterInput = ({ label, filterObj, stateUpdater, stateKey }: any) => (
   <div className="mb-4">
@@ -66,25 +60,11 @@ const FilterInput = ({ label, filterObj, stateUpdater, stateKey }: any) => (
   </div>
 );
 
-const RuleCard = ({ rule, ruleKey, title, desc, fields, stateUpdater }: any) => (
-  <div className={`mb-3 p-3 rounded border transition-colors ${rule.active ? 'bg-white border-blue-400 shadow-sm' : 'bg-gray-100 border-gray-200'}`}>
-    <div className="flex items-center gap-2 mb-1">
-      <input type="checkbox" checked={rule.active}
-        onChange={(e) => stateUpdater((prev: any) => ({ ...prev, [ruleKey]: { ...prev[ruleKey], active: e.target.checked } }))}
-        className="w-4 h-4 cursor-pointer" />
-      <label className="text-sm font-bold text-gray-800">{title}</label>
-    </div>
-    {desc && <div className="text-xs text-gray-500 mb-2 pl-6">{desc}</div>}
-    <div className="space-y-2 pl-6">
-      {fields.map((f: any) => (
-        <div key={f.field}>
-          <label className="text-xs text-gray-600 block mb-0.5">{f.label}</label>
-          <input type="number" disabled={!rule.active} value={rule[f.field]}
-            onChange={(e) => stateUpdater((prev: any) => ({ ...prev, [ruleKey]: { ...prev[ruleKey], [f.field]: Number(e.target.value) } }))}
-            className="w-full p-1.5 border rounded bg-gray-800 text-white disabled:opacity-40 text-sm" />
-        </div>
-      ))}
-    </div>
+const DeepInput = ({ label, hint, value, onChange }: any) => (
+  <div className="mb-3">
+    <label className="block text-sm font-medium mb-1 text-gray-700">{label}</label>
+    <input type="text" value={value} onChange={e => onChange(e.target.value)} placeholder={hint}
+      className="w-full border p-2 rounded text-black" />
   </div>
 );
 
@@ -109,6 +89,7 @@ export default function AuditDashboard() {
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
 
   const [activeEngine, setActiveEngine] = useState<'A' | 'B'>('A');
+  const [mergeByLottery, setMergeByLottery] = useState(false);
   const [dateStart, setDateStart] = useState(fmt(fiveDaysAgo));
   const [dateEnd, setDateEnd] = useState(fmt(today));
   const [platform, setPlatform] = useState('ALL');
@@ -122,32 +103,32 @@ export default function AuditDashboard() {
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set());
   const [hasQueried, setHasQueried] = useState(false);
 
+  // 預設條件以「莊家不賺錢的彩種」為目標：RTP ≥ 0.995 單條開啟，其餘留給使用者按需求加。
+  // 舊的預設（銷量 0~2000 且 盈虧 10萬~100萬 且 RTP 0.995~1.0）不要復原：
+  //   1. 銷量≤2000 卻要盈虧≥10萬，兩條互斥，命中永遠是 0
+  //   2. RTP 上限 1.0 會把「RTP>1 = 莊家倒虧」的彩種全部排除，那才是最該抓的
+  //      （實測 8/12 當天 RTP 最高 3.9526，單一彩種最多倒虧 790,034）
   const defaultFiltersA = {
-    minSales: { active: true, value: 0.00 },
-    maxSales: { active: true, value: 2000.00 },
-    minPnl: { active: true, value: 100000.00 },
-    maxPnl: { active: true, value: 1000000.00 },
+    minSales: { active: false, value: 0.00 },
+    maxSales: { active: false, value: 2000.00 },
+    minPnl: { active: false, value: 100000.00 },
+    maxPnl: { active: false, value: 1000000.00 },
     minRtp: { active: true, value: 0.995 },
-    maxRtp: { active: true, value: 1.000 },
-  };
-
-  const defaultFiltersB = {
-    rule1: { active: false, ratioHigh: 50, salesMin: 30000, salesMax: 99999999 },
-    rule2: { active: false, ratioLow: 2, depositMin: 1000, depositMax: 2000 },
-    rule3: { active: false, treatmentMin: 50000 },
-    rule4: { active: false, profitMin: 100000 },       // 原 rule5 (大額盈利)
-    rule5: { active: false, salesMin: 5000 },          // 原 rule6 (無充值銷量高)
+    maxRtp: { active: false, value: 1.000 },
   };
 
   // 側邊欄當下勾選(草稿) - 勾選時即時更新
   const [filtersA, setFiltersA] = useState(defaultFiltersA);
-  const [filtersB, setFiltersB] = useState(defaultFiltersB);
-
   // 實際套用到表格的條件 - 只在按「執行查詢」時才同步
   const [appliedFiltersA, setAppliedFiltersA] = useState(defaultFiltersA);
-  const [appliedFiltersB, setAppliedFiltersB] = useState(defaultFiltersB);
 
-  type SortCol = 'totalSales' | 'deposit' | 'ratio' | 'treatment' | 'profit';
+  // B 引擎（定向深查）：後端 member-bets 至少要指定一個對象，不能只給日期
+  const [deepUser, setDeepUser] = useState('');
+  const [deepLottery, setDeepLottery] = useState('');
+  const [deepCycle, setDeepCycle] = useState('');
+  const [deepResult, setDeepResult] = useState<any>(null);
+
+  type SortCol = 'bets' | 'betAmount' | 'winAmount' | 'memberProfit' | 'rtp';
   type SortState = { col: SortCol; dir: 'asc' | 'desc' } | null;
   const [sortBy, setSortBy] = useState<SortState>(null);
 
@@ -162,7 +143,33 @@ export default function AuditDashboard() {
   const filteredData = useMemo(() => {
     if (!Array.isArray(rawData)) return [];
     if (activeEngine === 'A') {
-      return rawData.filter(item => {
+      // 粒度：預設「平台 × 彩種」逐列；勾了合併才按彩種名跨平台加總
+      let rows = rawData;
+      if (mergeByLottery) {
+        const m = new Map<string, any>();
+        for (const r of rawData) {
+          const cur = m.get(r.lottery) ?? {
+            id: `merged::${r.lottery}`, lottery: r.lottery, platformSet: new Set<string>(),
+            people: 0, orderCount: 0, totalSales: 0, bonus: 0, treatment: 0, discount: 0, pnl: 0,
+          };
+          cur.platformSet.add(r.platform);
+          cur.people += r.people;
+          cur.orderCount += r.orderCount;
+          cur.totalSales += r.totalSales;
+          cur.bonus += r.bonus;
+          cur.treatment += r.treatment;
+          cur.discount += r.discount;
+          cur.pnl += r.pnl;
+          m.set(r.lottery, cur);
+        }
+        rows = [...m.values()].map((x: any) => ({
+          ...x,
+          platform: `${x.platformSet.size} 個平台`,
+          // 合併後的 RTP 必須拿加總後的分子分母重算 —— 各平台 RTP 直接平均是錯的
+          rtp: x.totalSales > 0 ? (x.bonus + x.treatment + x.discount) / x.totalSales : 0,
+        }));
+      }
+      return rows.filter(item => {
         try {
           if (appliedFiltersA.minSales.active && item.totalSales < appliedFiltersA.minSales.value) return false;
           if (appliedFiltersA.maxSales.active && item.totalSales > appliedFiltersA.maxSales.value) return false;
@@ -174,44 +181,18 @@ export default function AuditDashboard() {
         } catch { return false; }
       });
     }
-    const anyRuleActive = Object.values(appliedFiltersB).some((r: any) => r.active);
-    const result = rawData
-      .map((item: any) => {
-        const matched: string[] = [];
-        try {
-          // ① 充銷比高 + 銷量區間：比值≥閾值 且 銷量在[min,max]區間內
-          if (appliedFiltersB.rule1.active && item.deposit > 0
-              && item.ratio >= appliedFiltersB.rule1.ratioHigh
-              && item.totalSales >= appliedFiltersB.rule1.salesMin
-              && item.totalSales <= appliedFiltersB.rule1.salesMax) matched.push('充銷比高');
-          // ② 充銷比低 + 充值區間：比值≤閾值 且 充值在[min,max]區間內
-          if (appliedFiltersB.rule2.active && item.deposit > 0
-              && item.ratio <= appliedFiltersB.rule2.ratioLow
-              && item.deposit >= appliedFiltersB.rule2.depositMin
-              && item.deposit <= appliedFiltersB.rule2.depositMax) matched.push('充銷比低');
-          // ③ 高返點
-          if (appliedFiltersB.rule3.active && item.treatment >= appliedFiltersB.rule3.treatmentMin) matched.push('高返點');
-          // ④ 大額盈利 (原 rule5)
-          if (appliedFiltersB.rule4.active && item.profit >= appliedFiltersB.rule4.profitMin) matched.push('大額盈利');
-          // ⑤ 無充值銷量高 (原 rule6)
-          if (appliedFiltersB.rule5.active && item.deposit === 0 && item.totalSales > 0
-              && appliedFiltersB.rule5.salesMin > 0
-              && item.totalSales >= appliedFiltersB.rule5.salesMin) matched.push('無充值銷量高');
-        } catch {}
-        return { ...item, matchedReasons: matched };
-      })
-      .filter((item: any) => !anyRuleActive || item.matchedReasons.length > 0);
-
+    // B（定向深查）：伺服器端已經彙總到會員維度，這裡只負責排序，預設按「會員盈虧」高→低
+    const result = [...rawData];
     if (sortBy) {
       const sign = sortBy.dir === 'desc' ? -1 : 1;
-      return [...result].sort((a, b) => {
+      return result.sort((a, b) => {
         const av = Number(a[sortBy.col]) || 0;
         const bv = Number(b[sortBy.col]) || 0;
         return (av - bv) * sign;
       });
     }
     return result;
-  }, [rawData, activeEngine, appliedFiltersA, appliedFiltersB, sortBy]);
+  }, [rawData, activeEngine, appliedFiltersA, sortBy, mergeByLottery]);
 
   useEffect(() => {
     const saved = sessionStorage.getItem(TOKEN_KEY);
@@ -329,79 +310,68 @@ export default function AuditDashboard() {
     setCheckedItems(new Set());
     setSortBy(null);
     setHasQueried(true);
+    setDeepResult(null);
     // 把當下側邊欄的條件「凍結」成套用版本，這之後再勾選也不會影響表格
     setAppliedFiltersA(filtersA);
-    setAppliedFiltersB(filtersB);
     try {
-      // ───── 引擎 A：open API（按彩種匯總），走同源代理 GET（伺服器端帶 x-api-key + PROXY）─────
+      // ───── 引擎 A：open API（彩種統計，粒度為「平台 × 彩種」），走同源代理 GET ─────
+      // 資料源是 lottery-stats 不是 lottery-analysis —— 後者對 XO/XY/OL/XH/LS 五個平台一律回 0，
+      // 金額與本端點差 4000 倍以上，詳見 docs/API-現狀.md 第三節。
       if (activeEngine === 'A') {
         const qs = new URLSearchParams({ platform, dateStart, dateEnd }).toString();
-        const res = await fetch(`/api/lottery-analysis?${qs}`, { headers: { Accept: 'application/json' } });
+        const res = await fetch(`/api/lottery-stats?${qs}`, { headers: { Accept: 'application/json' } });
         const json = await res.json();
         if (!res.ok || json?.error) {
           throw new Error(json?.error || `連線異常 (${res.status})`);
         }
-        const rawArray: any[] = Array.isArray(json) ? json : (Array.isArray(json.rows) ? json.rows : []);
+        const rawArray: any[] = Array.isArray(json) ? json
+          : (Array.isArray(json.rows) ? json.rows : (Array.isArray(json.data) ? json.data : []));
         setRawCount(rawArray.length);
         if (rawArray.length > 0) setRawSample(rawArray[0]);
-        // 回傳每筆已是一個彩種（多平台已合併），直接對應欄位即可
         const finalRows = rawArray.map((r: any, i: number) => {
           const lottery = r['彩种'] ?? r['彩種'] ?? r.lottery ?? r.lottery_name ?? '-';
+          const plat = r['平台'] ?? r.platform ?? '-';
+          const totalSales = parseNum(r['投注金额'] ?? r['投注金額'] ?? r.betAmount ?? r.bet_amount);
+          const bonus = parseNum(r['奖金'] ?? r['獎金'] ?? r.bonus);
+          const treatment = parseNum(r['返点'] ?? r['返點'] ?? r.rebate ?? r.treatment);
+          const discount = parseNum(r['_减让奖金'] ?? r['_減讓獎金']);
           return {
-            id: `${lottery}::${i}`,
+            id: `${plat}::${lottery}::${i}`,
+            platform: plat,
             lottery,
+            people: parseNum(r['人数'] ?? r['人數']),
             orderCount: parseNum(r['投注笔数'] ?? r['投注筆數'] ?? r.orderCount ?? r.order_count),
-            totalSales: parseNum(r['投注金额'] ?? r['投注金額'] ?? r.betAmount ?? r.bet_amount ?? r.totalSales),
-            bonus: parseNum(r['奖金'] ?? r['獎金'] ?? r.bonus),
-            treatment: parseNum(r['返点'] ?? r['返點'] ?? r.rebate ?? r.treatment),
+            totalSales,
+            bonus,
+            treatment,
+            discount,
             pnl: parseNum(r['盈亏'] ?? r['盈虧'] ?? r.pnl ?? r.profit),
-            rtp: parseNum(r['RTP'] ?? r.rtp),
+            // RTP 一律自己算，不吃後端的：後端有近 19% 的列根本沒給 RTP 欄位，
+            // 直接採用會被當成 0，「RTP 0.995~1.0」這種條件就把它們全漏掉。
+            // 公式 (獎金+返點+減讓獎金)/投注金額 —— 對後端有給值的 895 列驗證吻合 99.9%。
+            rtp: totalSales > 0 ? (bonus + treatment + discount) / totalSales : 0,
           };
         });
         setRawData(finalRows);
         return;
       }
 
-      // ───── 引擎 B（會員輸贏統計）：open API（按會員帳號匯總），走同源代理 GET ─────
-      const qs = new URLSearchParams({ platform, dateStart, dateEnd }).toString();
-      const res = await fetch(`/api/member-income?${qs}`, { headers: { Accept: 'application/json' } });
+      // ───── 引擎 B（定向深查）：拉注單明細，伺服器端已彙總到會員維度 ─────
+      // 不做全站掃描：後端 member-bets 單次上限 10000 筆且沒有分頁，
+      // 實測整天全彩種要 1715MB、18 個彩種被截斷，數字必錯。詳見 docs/API-現狀.md 第四節。
+      const bq = new URLSearchParams({ dateStart, dateEnd });
+      if (deepUser.trim()) bq.set('username', deepUser.trim());
+      if (deepLottery.trim()) bq.set('lottery', deepLottery.trim());
+      if (deepCycle.trim()) bq.set('cycleValue', deepCycle.trim());
+      const res = await fetch(`/api/member-bets?${bq.toString()}`, { headers: { Accept: 'application/json' } });
       const json = await res.json();
       if (!res.ok || json?.error) {
         throw new Error(json?.error || `連線異常 (${res.status})`);
       }
-      const rawArray: any[] = Array.isArray(json) ? json : (Array.isArray(json.rows) ? json.rows : []);
-      setRawCount(rawArray.length);
-      if (rawArray.length > 0) setRawSample(rawArray[0]);
-
-      // 每筆已是一個會員帳號（總投注/總返點/總盈虧/總充值）。先試精確 key，再模糊比對
-      const pick = (r: any, exacts: string[], pats: RegExp[]) => {
-        for (const k of exacts) if (r[k] !== undefined && r[k] !== null) return r[k];
-        return findField(r, pats);
-      };
-      const finalRows = rawArray.map((r: any, i: number) => {
-        const username = pick(r,
-          ['账号', '帐号', '賬號', '帳號', '会员账号', '會員帳號', '用户名', '用戶名', 'account', 'username', 'member'],
-          [/[账帐賬帳][号號]/, /用[户戶]名/, /account/i, /username/i, /member/i]) ?? '-';
-        const platformVal = pick(r, ['平台', 'platform', 'site', 'merchant'], [/平台/, /platform/i]) ?? '-';
-        const totalSales = parseNum(pick(r, ['总投注', '總投注', '投注'], [/投注/, /销量/, /銷量/, /sales/i, /betamount/i]));
-        const deposit = parseNum(pick(r, ['总充值', '總充值', '充值'], [/充值/, /deposit/i, /recharge/i]));
-        const treatment = parseNum(pick(r, ['总返点', '總返點', '总返點', '總返点', '返点', '返點'], [/返点/, /返點/, /rebate/i]));
-        const profit = parseNum(pick(r, ['总盈亏', '總盈虧', '总盈虧', '總盈亏', '盈亏', '盈虧'], [/盈亏/, /盈虧/, /pnl/i, /profit/i]));
-        const ratio = deposit > 0 ? Number((totalSales / deposit).toFixed(2)) : 0;
-        return {
-          id: `${platformVal}::${username}::${i}`,
-          platform: platformVal,
-          username,
-          totalSales,
-          deposit,
-          treatment,
-          profit,
-          ratio,
-          reason: '',
-        };
-      });
-
-      setRawData(finalRows);
+      setDeepResult(json);
+      setRawCount(json.summary?.records ?? 0);
+      if (json.sample?.length) setRawSample(json.sample[0]);
+      setRawData((json.byMember ?? []).map((m: any) => ({ ...m, id: m.username })));
 
     } catch (error: any) {
       console.error('查詢失敗:', error);
@@ -425,11 +395,11 @@ export default function AuditDashboard() {
         <div className="space-y-2 mb-8">
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" name="engine" checked={activeEngine === 'A'} onChange={() => setActiveEngine('A')} className="w-4 h-4 text-red-500" />
-            <span className={activeEngine === 'A' ? "font-bold text-black" : "text-gray-600"}>采種分析查詢</span>
+            <span className={activeEngine === 'A' ? "font-bold text-black" : "text-gray-600"}>彩種統計查詢</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" name="engine" checked={activeEngine === 'B'} onChange={() => setActiveEngine('B')} className="w-4 h-4 text-gray-800" />
-            <span className={activeEngine === 'B' ? "font-bold text-black" : "text-gray-600"}>會員輸贏統計</span>
+            <span className={activeEngine === 'B' ? "font-bold text-black" : "text-gray-600"}>會員注單深查</span>
           </label>
         </div>
 
@@ -441,10 +411,8 @@ export default function AuditDashboard() {
           <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="w-full border p-1 rounded mb-2 text-black" />
           <label className="block text-sm font-medium mb-1">Date End</label>
           <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="w-full border p-1 rounded text-black" />
-          {hasQueried && (activeEngine === 'A'
-            ? JSON.stringify(filtersA) !== JSON.stringify(appliedFiltersA)
-            : JSON.stringify(filtersB) !== JSON.stringify(appliedFiltersB)
-          ) && (
+          {hasQueried && activeEngine === 'A'
+            && JSON.stringify(filtersA) !== JSON.stringify(appliedFiltersA) && (
             <div className="mt-2 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded p-1.5 font-medium">
               ⏳ 條件有變更，按「執行查詢」才會套用
             </div>
@@ -459,6 +427,10 @@ export default function AuditDashboard() {
 
         {activeEngine === 'A' && (
           <div className="space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer mb-3 p-2 bg-white rounded border border-gray-200">
+              <input type="checkbox" checked={mergeByLottery} onChange={e => setMergeByLottery(e.target.checked)} className="w-4 h-4 cursor-pointer" />
+              <span className="text-sm font-medium text-gray-700">按彩種合併（跨平台加總）</span>
+            </label>
             <FilterInput label="Min銷量" filterObj={filtersA.minSales} stateUpdater={setFiltersA} stateKey="minSales" />
             <FilterInput label="Max銷量" filterObj={filtersA.maxSales} stateUpdater={setFiltersA} stateKey="maxSales" />
             <FilterInput label="Min盈虧" filterObj={filtersA.minPnl} stateUpdater={setFiltersA} stateKey="minPnl" />
@@ -470,56 +442,50 @@ export default function AuditDashboard() {
 
         {activeEngine === 'B' && (
           <div>
-            <div className="text-xs text-gray-500 mb-2 px-1">勾選要啟用的規則，規則之間為「或」關係</div>
-            <RuleCard rule={filtersB.rule1} ruleKey="rule1" title="① 充銷比(高) + 銷量區間" desc="比值≥閾值 且 銷量落在[最小, 最大]區間內"
-              fields={[
-                { field: 'ratioHigh', label: '充銷比(高) ≥' },
-                { field: 'salesMin', label: '銷量(小) ≥' },
-                { field: 'salesMax', label: '銷量(大) ≤' },
-              ]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule2} ruleKey="rule2" title="② 充銷比(低) + 充值區間" desc="比值≤閾值 且 充值落在[最小, 最大]區間內"
-              fields={[
-                { field: 'ratioLow', label: '充銷比(低) ≤' },
-                { field: 'depositMin', label: '充值(小) ≥' },
-                { field: 'depositMax', label: '充值(大) ≤' },
-              ]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule3} ruleKey="rule3" title="③ 返點" desc="返點 ≥ 閾值"
-              fields={[{ field: 'treatmentMin', label: '返點 ≥' }]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule4} ruleKey="rule4" title="④ 盈虧" desc="盈利 ≥ 閾值"
-              fields={[{ field: 'profitMin', label: '盈虧 ≥' }]} stateUpdater={setFiltersB} />
-            <RuleCard rule={filtersB.rule5} ruleKey="rule5" title="⑤ 無充值銷量高" desc="充值 = 0 且 銷量 ≥ 閾值"
-              fields={[{ field: 'salesMin', label: '銷量 ≥' }]} stateUpdater={setFiltersB} />
+            <div className="mb-3 p-2 bg-amber-50 border border-amber-300 rounded text-xs text-amber-800">
+              後端 <code>member-income</code> 目前任何日期都回 0 筆，全站掃描的五條規則暫時下架
+              （定義留在 docs/API-現狀.md）。這裡改成拉注單明細做定向深查。
+            </div>
+            <div className="text-xs text-gray-500 mb-2 px-1">下面三個至少填一個，不能只給日期</div>
+            <DeepInput label="會員帳號" hint="例如 lh838366" value={deepUser} onChange={setDeepUser} />
+            <DeepInput label="彩種" hint="例如 東京1.5分彩" value={deepLottery} onChange={setDeepLottery} />
+            <DeepInput label="期號" hint="例如 202608130360" value={deepCycle} onChange={setDeepCycle} />
+            <div className="text-xs text-gray-500 px-1 leading-relaxed">
+              查單一會員最快且數字完整。查大彩種可能超過 60MB 上限被擋下，
+              那時候改用更短的日期區間。
+            </div>
           </div>
         )}
       </div>
 
       <div className="flex-1 p-8 overflow-y-auto bg-gray-50 relative">
         <div className="bg-slate-800 text-white rounded-lg p-6 mb-6 text-center text-3xl font-bold shadow-lg">
-          📊 {activeEngine === 'A' ? '采種分析查詢' : '會員輸贏統計'}
+          📊 {activeEngine === 'A' ? '彩種統計查詢' : '會員注單深查'}
         </div>
 
         {hasQueried && !loading && (
           <div className="bg-yellow-50 border border-yellow-300 rounded p-3 mb-4 text-sm font-mono">
-            <div>🔸 API 回傳原始筆數：<b>{rawCount}</b></div>
-            <div>🔸 前端去重後筆數：<b>{rawData.length}</b></div>
-            <div>🔸 通過過濾條件筆數：<b>{filteredData.length}</b></div>
-            {activeEngine === 'B' && (() => {
-              const active: string[] = [];
-              if (appliedFiltersB.rule1.active) active.push(`①充銷比高: 比值≥${appliedFiltersB.rule1.ratioHigh}, 銷量∈[${appliedFiltersB.rule1.salesMin}, ${appliedFiltersB.rule1.salesMax}]`);
-              if (appliedFiltersB.rule2.active) active.push(`②充銷比低: 比值≤${appliedFiltersB.rule2.ratioLow}, 充值∈[${appliedFiltersB.rule2.depositMin}, ${appliedFiltersB.rule2.depositMax}]`);
-              if (appliedFiltersB.rule3.active) active.push(`③高返點: 返點≥${appliedFiltersB.rule3.treatmentMin}`);
-              if (appliedFiltersB.rule4.active) active.push(`④大額盈利: 盈虧≥${appliedFiltersB.rule4.profitMin}`);
-              if (appliedFiltersB.rule5.active) active.push(`⑤無充值銷量高: 銷量≥${appliedFiltersB.rule5.salesMin}`);
-              return active.length > 0 ? (
-                <div className="mt-1 text-xs text-gray-700">
-                  <span className="font-bold">🔧 本次查詢套用規則：</span>
-                  <ul className="list-disc ml-5 mt-1">
-                    {active.map((s, i) => <li key={i}>{s}</li>)}
-                  </ul>
+            {activeEngine === 'A' ? (
+              <>
+                <div>🔸 API 回傳原始筆數：<b>{rawCount}</b></div>
+                <div>🔸 {mergeByLottery ? '按彩種合併後' : '平台 × 彩種'} 筆數：<b>{filteredData.length}</b></div>
+              </>
+            ) : deepResult?.summary ? (
+              <>
+                <div>🔸 注單筆數：<b>{deepResult.summary.records}</b>　會員 <b>{deepResult.summary.memberCount}</b> 人　IP <b>{deepResult.summary.ipCount}</b> 個</div>
+                <div>🔸 投注 <b>{fmtMoney(deepResult.summary.betAmount)}</b>　派彩 <b>{fmtMoney(deepResult.summary.winAmount)}</b>　莊家盈虧{' '}
+                  <b className={deepResult.summary.housePnl >= 0 ? 'text-green-600' : 'text-red-600'}>{fmtMoney(deepResult.summary.housePnl)}</b>
                 </div>
-              ) : null;
-            })()}
-            {rawCount > 0 && filteredData.length === 0 && (
+                <div className="text-xs text-gray-500">🔸 回應體 {(deepResult.summary.bytes / 1048576).toFixed(1)}MB</div>
+                {deepResult.summary.truncated && (
+                  <div className="mt-2 p-2 bg-red-100 border border-red-400 rounded text-red-700 font-bold">
+                    ⚠️ 撞到後端 10000 筆上限，這批資料<b>不完整</b>，上面的金額全部偏低。
+                    請縮短日期區間、或改查單一會員帳號。
+                  </div>
+                )}
+              </>
+            ) : null}
+            {activeEngine === 'A' && rawCount > 0 && filteredData.length === 0 && (
               <div className="text-red-600 font-bold mt-2">⚠️ API 有資料，但被過濾條件全部剃除！請放寬左側規則條件。</div>
             )}
             {rawCount === 0 && !errorMsg && (
@@ -559,28 +525,63 @@ export default function AuditDashboard() {
 
         {activeEngine === 'B' && hasQueried && sortBy && (
           <div className="mb-3 text-xs text-gray-600">
-            目前排序：<b>{ ({totalSales:'銷量', deposit:'充值', ratio:'充值銷量比', treatment:'返點', profit:'盈虧'} as any)[sortBy.col] }</b> {sortBy.dir === 'desc' ? '↓ 高→低' : '↑ 低→高'}
+            目前排序：<b>{ ({bets:'注單筆數', betAmount:'投注', winAmount:'派彩', memberProfit:'會員盈虧', rtp:'RTP'} as any)[sortBy.col] }</b> {sortBy.dir === 'desc' ? '↓ 高→低' : '↑ 低→高'}
             <button onClick={() => setSortBy(null)} className="ml-2 text-blue-500 hover:text-red-500 underline">清除排序</button>
           </div>
         )}
+
+        {/* 同 IP 多帳號 —— 機房 IP 會讓幾十個不相干的人共用一個出口，必須分開看 */}
+        {activeEngine === 'B' && deepResult?.byIp?.length > 0 && (() => {
+          const home = deepResult.byIp.filter((x: any) => !x.datacenter);
+          const dc = deepResult.byIp.filter((x: any) => x.datacenter);
+          return (
+            <div className="bg-white rounded-lg shadow border border-gray-200 p-4 mb-4">
+              <div className="font-bold text-gray-700 mb-2">🔗 同 IP 多帳號</div>
+              {home.length === 0 && <div className="text-sm text-gray-500">沒有住宅 IP 共用的情況。</div>}
+              {home.map((x: any) => (
+                <div key={x.ip} className="text-sm mb-1">
+                  <span className="font-mono font-bold text-red-600">{x.ip}</span>
+                  <span className="text-gray-500"> — {x.memberCount} 個帳號：</span>
+                  <span className="text-blue-700">{x.members.join('、')}</span>
+                </div>
+              ))}
+              {dc.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-500">
+                  另有 {dc.length} 個機房 / 雲端出口 IP（{dc.slice(0, 3).map((x: any) => x.ip).join('、')}
+                  {dc.length > 3 ? ' 等' : ''}）共用帳號，那是代理或 VPN，不能當成同一組人的證據，已排除。
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="bg-white rounded-lg shadow border border-gray-200">
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-gray-100 border-b sticky top-0 z-20 shadow-sm">
               <tr>
                 <th className="p-4 font-bold text-gray-600">核查</th>
-                {activeEngine === 'A' && <><th className="p-4 font-bold text-gray-600">彩種</th><th className="p-4 font-bold text-gray-600">投注筆數</th></>}
-                {activeEngine === 'B' && <><th className="p-4 font-bold text-gray-600">平台</th><th className="p-4 font-bold text-gray-600">用戶名</th><th className="p-4 font-bold text-gray-600">原因</th></>}
+                {activeEngine === 'A' && <>
+                  <th className="p-4 font-bold text-gray-600">平台</th>
+                  <th className="p-4 font-bold text-gray-600">彩種</th>
+                  <th className="p-4 font-bold text-gray-600">人數</th>
+                  <th className="p-4 font-bold text-gray-600">投注筆數</th>
+                </>}
+                {activeEngine === 'B' && <>
+                  <th className="p-4 font-bold text-gray-600">平台</th>
+                  <th className="p-4 font-bold text-gray-600">會員帳號</th>
+                  <th className="p-4 font-bold text-gray-600">彩種數</th>
+                  <th className="p-4 font-bold text-gray-600">IP</th>
+                </>}
                 {activeEngine === 'A' ? (
                   <><th className="p-4 font-bold text-gray-600">投注金額</th><th className="p-4 font-bold text-gray-600">獎金</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
                 ) : (
                   <>
                     {([
-                      { col: 'totalSales', label: '銷量' },
-                      { col: 'deposit', label: '充值' },
-                      { col: 'ratio', label: '充值銷量比' },
-                      { col: 'treatment', label: '返點' },
-                      { col: 'profit', label: '盈虧' },
+                      { col: 'bets', label: '注單筆數' },
+                      { col: 'betAmount', label: '投注' },
+                      { col: 'winAmount', label: '派彩' },
+                      { col: 'memberProfit', label: '會員盈虧' },
+                      { col: 'rtp', label: 'RTP' },
                     ] as { col: SortCol; label: string }[]).map(({ col, label }) => {
                       const isActive = sortBy?.col === col;
                       const arrow = isActive ? (sortBy!.dir === 'desc' ? '↓' : '↑') : '↕';
@@ -606,30 +607,30 @@ export default function AuditDashboard() {
                 filteredData.map((item: any) => (
                   <tr key={item.id} className="border-b hover:bg-blue-50 transition-colors">
                     <td className="p-4"><input type="checkbox" className="w-4 h-4 cursor-pointer" checked={checkedItems.has(item.id)} onChange={() => toggleCheck(item.id)} /></td>
-                    {activeEngine === 'A' && <><td className="p-4 font-bold text-blue-600 whitespace-normal max-w-xs">{item.lottery}</td><td className="p-4">{item.orderCount}</td></>}
+                    {activeEngine === 'A' && <>
+                      <td className="p-4 font-medium">{item.platform}</td>
+                      <td className="p-4 font-bold text-blue-600 whitespace-normal max-w-xs">{item.lottery}</td>
+                      <td className="p-4">{item.people}</td>
+                      <td className="p-4">{item.orderCount}</td>
+                    </>}
                     {activeEngine === 'B' && <>
                       <td className="p-4 font-medium">{item.platform}</td>
                       <td className="p-4 text-blue-600 font-bold">{item.username}</td>
-                      <td className="p-4">
-                        {item.matchedReasons?.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {item.matchedReasons.map((r: string, i: number) => (
-                              <span key={i} className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold whitespace-nowrap">{r}</span>
-                            ))}
-                          </div>
-                        ) : (
-                          item.reason && <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">{item.reason}</span>
-                        )}
+                      <td className="p-4">{item.lotteryCount}</td>
+                      <td className="p-4 text-xs font-mono text-gray-600" title={item.ips?.join('\n')}>
+                        {item.ipCount === 1 ? item.ips[0] : `${item.ipCount} 個`}
                       </td>
                     </>}
                     {activeEngine === 'A' ? (
-                      <><td className="p-4">{item.totalSales}</td><td className="p-4">{item.bonus}</td><td className="p-4">{item.treatment}</td>
-                        <td className={`p-4 font-bold ${item.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{item.pnl}</td>
-                        <td className="p-4">{item.rtp}</td></>
+                      <><td className="p-4">{fmtMoney(item.totalSales)}</td><td className="p-4">{fmtMoney(item.bonus)}</td><td className="p-4">{fmtMoney(item.treatment)}</td>
+                        <td className={`p-4 font-bold ${item.pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmtMoney(item.pnl)}</td>
+                        <td className="p-4">{fmtRtp(item.rtp)}</td></>
                     ) : (
-                      <><td className="p-4">{item.totalSales}</td><td className="p-4">{item.deposit}</td>
-                        <td className="p-4">{item.ratio}</td><td className="p-4">{item.treatment}</td>
-                        <td className={`p-4 font-bold ${item.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{item.profit}</td></>
+                      <><td className="p-4">{item.bets}</td><td className="p-4">{fmtMoney(item.betAmount)}</td>
+                        <td className="p-4">{fmtMoney(item.winAmount)}</td>
+                        {/* 會員盈虧為正 = 會員贏錢 = 莊家輸，用紅色示警 */}
+                        <td className={`p-4 font-bold ${item.memberProfit > 0 ? 'text-red-600' : 'text-green-600'}`}>{fmtMoney(item.memberProfit)}</td>
+                        <td className={`p-4 ${item.rtp >= 1 ? 'font-bold text-red-600' : ''}`}>{fmtRtp(item.rtp)}</td></>
                     )}
                   </tr>
                 ))

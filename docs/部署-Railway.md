@@ -29,15 +29,24 @@ Node 版本靠 `package.json` 的 `engines` 锁在 `>=20.9.0`（Next 16 的下�
 | `PROXY_PORT` | 代理连接埠 | 同上 |
 | `PROXY_USER` | 代理帐号 | 同上 |
 | `PROXY_PASS` | 代理密码 | 同上 |
-| `SUPABASE_URL` | Supabase 专案网址 | 登入 500 |
-| `SUPABASE_SERVICE_ROLE_KEY` | **service_role** key，不是 anon key | 登入 500 |
-| `JWT_SECRET` | 自签 JWT 密钥（随机长字串） | 登入 500 |
+| `ALLOWED_IPS` | IP 白名单，逗号分隔，支援 CIDR | **整站一律 403** |
 | `STATS_BACKEND_URL` | 选填，不设预设 `https://stats-crawler.up.railway.app` | — |
 
 `PROXY_HOST/PORT/USER/PASS` 也可以改成设一个完整的 `PROXY=http://user:pass@host:port` 代替。
 
-> `SUPABASE_URL` 结尾**不要**带 `/rest/v1/`。2026-06-19 那次登入 500 就是这么来的
-> （PostgREST 回 PGRST125）。程式已经会容错去尾，但别故意去踩。
+### 存取控制：IP 白名单
+
+原本的 Supabase 帐密登入已经整套移除（连 `@supabase/supabase-js`、`bcryptjs`、
+`jsonwebtoken` 依赖都拿掉了），改用 [`proxy.ts`](../proxy.ts) 做 IP 白名单。
+Next 16 把 `middleware` 改名成 `proxy`，档案要放专案根目录、与 `app/` 同层。
+
+- `ALLOWED_IPS` **没设时一律拒绝**，不是一律放行 —— 这站看得到 18 个平台的投注、
+  盈亏、会员帐号和 IP，设定没做完之前不能裸奔
+- 被拒页面会显示判定到的来源 IP，方便把自己加进白名单
+- 本机 `next dev` 会自动豁免（`NODE_ENV=development`），否则本机没有
+  `x-forwarded-for`，开发时自己也进不去
+
+来源 IP 取自 `x-forwarded-for` 的第一段，取不到才退回 `x-real-ip`。
 
 ## 三、代理不是可选的
 
@@ -49,15 +58,19 @@ Railway 的对外 IP 不固定，所以不能靠把 IP 加白名单解决，**�
 
 ## 四、部署后自我检查
 
-1. 开首页 → 应该看到「審計系統登入」
-2. 登入 → 进不去表示 Supabase 三个变量有问题（看 Railway logs 的 `[err:xxxx]`）
-3. A 引擎选昨天日期、平台留 `ALL` → 按执行查询
+1. 开首页
+   - 看到 403 且显示你的 IP → 把那个 IP 加进 `ALLOWED_IPS`
+   - 看到主介面 → 白名单正确
+2. A 引擎选昨天日期、平台留 `ALL` → 按执行查询
    - 正常：约 500～600 笔（18 个平台 × 各自彩种）
    - 回 0 笔或报转址错误 → 代理变量问题
-4. B 引擎目前一定是 0 笔，那是后端 `member-income` 的问题，不是部署问题，
-   详见 [API-现状.md](API-现状.md)
+3. B 引擎（会员注单深查）填一个会员帐号试
+   - 正常：拿得到该会员的注单汇总
+   - 报 60MB 超限 → 查询范围太大，缩短日期或改查单一会员
 
 ## 五、还没做的事
 
 - Vercel 上那个旧部署要不要关掉，等确认 Railway 这边稳了再决定
 - 目前没有 CI，push 到 main 就会自动部署，没有预览环境
+- 换网路（换 wifi、用手机、出门）来源 IP 会变，得再加白名单。
+  如果之后觉得麻烦，可以改回帐密登入，或改成帐密 + IP 双重

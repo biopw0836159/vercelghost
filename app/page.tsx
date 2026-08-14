@@ -96,6 +96,7 @@ export default function AuditDashboard() {
     ratioLow: '2', r2DepositMin: '1000', r2DepositMax: '2000',
     treatmentMin: '50000', profitMin: '100000', r5SalesMin: '5000',
   });
+  const [deepPlatform, setDeepPlatform] = useState('');
   const [deepUser, setDeepUser] = useState('');
   const [deepLottery, setDeepLottery] = useState('');
   const [deepCycle, setDeepCycle] = useState('');
@@ -231,6 +232,7 @@ export default function AuditDashboard() {
       if (deepLottery.trim()) bq.set('lottery', deepLottery.trim());
       if (deepCycle.trim()) bq.set('cycleValue', deepCycle.trim());
       if (deepShift) bq.set('shift', deepShift);
+      if (deepPlatform.trim()) bq.set('platform', deepPlatform.trim());
       const res = await fetch(`/api/member-bets?${bq.toString()}`, { headers: { Accept: 'application/json' } });
       const json = await res.json();
       if (!res.ok || json?.error) {
@@ -255,7 +257,9 @@ export default function AuditDashboard() {
     setEnrichLoading(true);
     setEnrichErr('');
     try {
-      const targets = filteredData.slice(0, 30)
+      // 不截斷：表格裡有幾個就查幾個。B 引擎約 1 秒/人、伺服器端併發 10，
+      // 人多就是久一點，但不會少查。
+      const targets = filteredData
         .map((m: any) => `${(m.platform || '').split(',')[0]}:${m.username}`)
         .filter((s: string) => !s.startsWith(':') && !s.endsWith(':'));
       if (!targets.length) throw new Error('目前表格沒有可查的會員');
@@ -370,9 +374,16 @@ export default function AuditDashboard() {
             <DeepInput label="彩種" hint="例如 東京1.5分彩" value={deepLottery} onChange={setDeepLottery} />
             <DeepInput label="期號" hint="例如 202608130360" value={deepCycle} onChange={setDeepCycle} />
             <div className="text-xs text-gray-500 px-1 leading-relaxed mb-4">
-              查會員帳號走 C 引擎（有分頁、欄位多、較快）；查彩種或期號走舊端點，
-              可能串到別的彩種，結果會標紅字說明。
+              全部走 C 引擎，翻頁翻到底、不設資料量上限，數字不會被截斷。
+              <br />
+              <b className="text-gray-700">查會員帳號很快</b>（後端直接依帳號撈，通常 1 秒內）。
+              <br />
+              <b className="text-orange-700">查彩種或期號會很慢</b> —— C 引擎沒有這兩個參數，
+              只能把該期間的注單全部拉回來再本地精確比對。實測查一天單一平台約需
+              <b> 9 分鐘</b>（翻 125 頁、62 萬筆）。好處是不會串到別的彩種、也沒有 1 萬筆上限，
+              數字完整。<b className="text-gray-700">建議先指定平台縮小範圍</b>，同樣條件再查會直接命中快取。
             </div>
+            <DeepInput label="平台（選填，可用逗號分隔）" hint="例如 HS 或 HS,XO；留空 = 全部平台" value={deepPlatform} onChange={setDeepPlatform} />
 
             <div className="border-t border-gray-300 pt-3">
               <div className="font-bold text-sm text-gray-700 mb-1">B 引擎（充值/返點/工資）</div>
@@ -411,7 +422,9 @@ export default function AuditDashboard() {
 
               <button onClick={enrichMembers} disabled={enrichLoading || !hasQueried}
                 className="w-full bg-emerald-700 text-white py-2 rounded hover:bg-emerald-800 disabled:opacity-50 text-sm">
-                {enrichLoading ? '查詢中…' : '補 B 引擎資料（最多 30 人）'}
+                {enrichLoading
+                  ? `查詢中…（${filteredData.length} 人，約 ${Math.ceil(filteredData.length / 10)} 秒）`
+                  : `補 B 引擎資料（表格內 ${filteredData.length} 人全查）`}
               </button>
               {enrichErr && <div className="mt-2 text-xs text-red-600">{enrichErr}</div>}
             </div>

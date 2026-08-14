@@ -114,43 +114,51 @@ export async function fetchProfitLoss(
   };
 }
 
-// ── C 引擎：注單明細（cursor 分頁）──
+// ── C 引擎：注單明細（cursor 分頁，串流式）──
 export type BetOrder = Record<string, unknown>;
-export type BetOrdersResult =
-  | { ok: true; records: BetOrder[]; pages: number; truncated: boolean; bytes: number; capMessage: string }
+export type StreamResult =
+  | { ok: true; pages: number; records: number; bytes: number; truncated: boolean; capMessage: string }
   | { ok: false; status: number; error: string };
 
 /**
- * 拉注單。後端每頁上限 5000 筆，靠 nextCursor 往下翻。
- * maxPages 是防護欄：翻不完就標 truncated，讓呼叫方如實告訴使用者資料不完整，
- * 而不是默默給一份少掉一半的數字。
+ * 拉注單，**一頁一頁交給 onBatch 立刻彙總，本函式不累積原始行**。
+ *
+ * 這是這支能「查多久就拉多久、資料不打折」的關鍵：記憶體只吃當下這一頁（約 2.5MB），
+ * 所以翻幾百頁也不會爆；不像把整批收進陣列再處理，那樣百萬筆就死了。
+ *
+ * 預設一路翻到 hasMore=false 為止，不設資料量上限。maxPages 只是防呆用的極大值
+ * （避免後端 cursor 有 bug 時無限迴圈），正常查詢碰不到；真的碰到會標 truncated，
+ * 讓呼叫方如實告訴使用者，而不是默默給一份少掉一截的數字。
  */
-export async function fetchBetOrders(params: {
-  platforms: string[];
-  dateStart: string;
-  dateEnd: string;
-  username?: string;
-  maxPages?: number;
-  maxRecords?: number;
-}): Promise<BetOrdersResult> {
-  const { platforms, dateStart, dateEnd, username, maxPages = 12, maxRecords = 60000 } = params;
+export async function streamBetOrders(
+  params: {
+    platforms: string[];
+    dateStart: string;
+    dateEnd: string;
+    username?: string;
+    maxPages?: number;
+  },
+  onBatch: (rows: BetOrder[]) => void,
+): Promise<StreamResult> {
+  const { platforms, dateStart, dateEnd, username, maxPages = 2000 } = params;
 
-  const records: BetOrder[] = [];
   let cursor: unknown = null;
   let pages = 0;
+  let records = 0;
   let bytes = 0;
   let truncated = false;
   let capMessage = '';
 
-  while (pages < maxPages) {
+  for (;;) {
     const body: Record<string, unknown> = { platforms, dateStart, dateEnd, limit: 5000 };
     if (username) body.username = username;
     if (cursor) body.cursor = cursor;
 
-    const r = await postEngine('/api/query-bet-orders', body);
+    // 單頁保護：正常一頁約 2.5MB，給 80MB 是為了擋後端異常回應，不是拿來限制資料量
+    const r = await postEngine('/api/query-bet-orders', body, 80 * 1024 * 1024);
     if (!r.ok) {
-      // 已經拿到部分資料就先回，並標記不完整；完全沒拿到才當失敗
-      if (records.length) { truncated = true; break; }
+      // 已經聚合了一部分就先回並標記不完整；完全沒拿到才當失敗
+      if (records > 0) { truncated = true; break; }
       return r;
     }
     pages++;
@@ -158,14 +166,14 @@ export async function fetchBetOrders(params: {
 
     const d = r.data as { records?: BetOrder[]; hasMore?: boolean; nextCursor?: unknown; capMessage?: string };
     const page = d.records ?? [];
-    records.push(...page);
+    records += page.length;
+    if (page.length) onBatch(page);
     if (d.capMessage) capMessage = String(d.capMessage);
 
-    if (records.length >= maxRecords) { truncated = !!d.hasMore; break; }
     if (!d.hasMore || !d.nextCursor) break;
+    if (pages >= maxPages) { truncated = true; break; }
     cursor = d.nextCursor;
-    if (pages >= maxPages) truncated = true;
   }
 
-  return { ok: true, records, pages, truncated, bytes, capMessage };
+  return { ok: true, pages, records, bytes, truncated, capMessage };
 }

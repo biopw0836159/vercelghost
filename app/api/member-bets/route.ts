@@ -3,20 +3,21 @@
 // 為什麼要在伺服器端就彙總完：注單明細單次回應實測可達 264MB，
 // 原封不動丟給瀏覽器會直接卡死，所以這裡只回彙總結果 + 少量樣本明細。
 //
-// ── 兩條資料源，依查詢對象自動分流（2026-08-14 實測後改）──
-//   查會員 → C 引擎 POST /api/query-bet-orders
-//     每頁 5000 筆可用 cursor 翻到底（無 1 萬筆硬上限）、同一查詢快 3 倍、
-//     且多回 real_earn（真實盈虧）/ bet_content（投注內容）/ open_code（開獎號）/ win_count。
-//     限制：platforms 必填（省略、空陣列、'ALL' 都回 400 或 0 筆），且不吃 lottery / cycle_value。
-//   查彩種或期號 → 舊的 GET /api/v1/member-bets
-//     C 引擎沒有這兩個參數，只能繼續走這支；它會串彩種、也有 1 萬筆硬上限，
-//     所以結果一律附上串號警告與截斷警告。
+// ── 一律走 C 引擎 POST /api/query-bet-orders ──
+// 這是篩選源頭資料的工具，不能有「擋資料」的限制：查多久就拉多久，翻頁翻到底，
+// 一筆都不能少。做法是**邊拉邊彙總**（streamBetOrders 一頁一頁交出來、算完就丟），
+// 記憶體只吃當下那一頁，所以翻幾百頁也不會爆。
+//
+// 彩種 / 期號：C 引擎沒有這兩個參數，改成「拉全量再本地精確比對」。
+// 這樣同時解掉舊 GET /api/v1/member-bets 的兩個毛病 ——
+// 它有 1 萬筆硬上限（資料會少）、而且 lottery 參數會串到別的彩種（排列五(15) → 排列三五）。
+// 本地比對用字串完全相等，不會串號；代價是要把該期間的注單拉完，慢但準。
 //
 // Query：username / lottery / cycleValue 至少給一個，加上 dateStart、dateEnd（yyyy-MM-dd）
-//        platform（選填，查會員時指定可省一次平台清單查詢）、shift（早/中/晚，選填）
+//        platform（選填，指定可省一次平台清單查詢）、shift（早/中/晚，選填）
 import { NextResponse } from 'next/server';
-import { fetchOpenApi, fetchOpenApiLarge } from '@/lib/open-api';
-import { fetchBetOrders } from '@/lib/engines';
+import { fetchOpenApi } from '@/lib/open-api';
+import { streamBetOrders } from '@/lib/engines';
 import { isDatacenterIp } from '@/lib/ip-class';
 import { cacheGet, cacheSet, ttlFor } from '@/lib/cache';
 
@@ -156,44 +157,12 @@ export async function GET(req: Request) {
   const cached = cacheGet<unknown>(cacheKey);
   if (cached) return NextResponse.json(cached, { headers: { 'x-cache': 'HIT' } });
 
-  // ── 依查詢對象分流資料源 ──
-  let rows: Bet[];
-  let sourceEngine: 'C' | 'v1';
-  let truncated: boolean;
-  let bytes: number;
-  let pages = 0;
-  let capMessage = '';
-
-  if (username && !lottery && !cycleValue) {
-    // 查會員 → C 引擎（有分頁、欄位多、較快）
-    const plats = await resolvePlatforms(platformParam, dateStart, dateEnd);
-    if (!plats) {
-      return NextResponse.json(
-        { error: '取不到平台清單（C 引擎的 platforms 必填）。請在 platform 參數指定平台，或稍後再試。' },
-        { status: 502 },
-      );
-    }
-    const c = await fetchBetOrders({ platforms: plats, dateStart, dateEnd, username });
-    if (!c.ok) return NextResponse.json({ error: c.error }, { status: c.status });
-    rows = c.records.map(normalizeC);
-    sourceEngine = 'C';
-    truncated = c.truncated;
-    bytes = c.bytes;
-    pages = c.pages;
-    capMessage = c.capMessage;
-  } else {
-    // 查彩種 / 期號 → C 引擎沒有這兩個參數，只能走舊端點
-    const params: Record<string, string> = { date_start: dateStart, date_end: dateEnd };
-    if (username) params.username = username;
-    if (lottery) params.lottery = lottery;
-    if (cycleValue) params.cycle_value = cycleValue;
-
-    const r = await fetchOpenApiLarge('/api/v1/member-bets', params);
-    if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
-    rows = r.rows.map(normalizeV1);
-    sourceEngine = 'v1';
-    truncated = r.truncated;
-    bytes = r.bytes;
+  const plats = await resolvePlatforms(platformParam, dateStart, dateEnd);
+  if (!plats) {
+    return NextResponse.json(
+      { error: '取不到平台清單（C 引擎的 platforms 必填）。請在 platform 參數指定平台，或稍後再試。' },
+      { status: 502 },
+    );
   }
 
   // ── 彙總到會員維度 ──
@@ -221,12 +190,23 @@ export async function GET(req: Request) {
   let realEarnSum = 0, realEarnRows = 0;
   // 撤單：源頭把 CANCEL 的注單也算進投注額裡，照源頭不動，但要標出來讓人知道
   let cancelled = 0, cancelledAmount = 0;
+  // 本地精確比對篩掉的筆數（彩種/期號用；C 引擎沒有這兩個參數）
+  let excludedByTarget = 0;
 
-  for (const b of rows) {
+  // 這段期間實際出現過的彩種名（不論有沒有被篩掉），查不到東西時拿來提示正確寫法
+  const seenLotteries = new Map<string, number>();
+
+  // 一筆注單的處理：串流過來就地算完，不留原始行
+  const consume = (b: Bet) => {
+    if (b.lottery) seenLotteries.set(b.lottery, (seenLotteries.get(b.lottery) ?? 0) + 1);
+    // 彩種 / 期號用字串完全相等比對，不做模糊匹配 —— 舊端點就是因為模糊映射才會串號
+    if (lottery && b.lottery !== lottery) { excludedByTarget++; return; }
+    if (cycleValue && b.cycleValue !== cycleValue) { excludedByTarget++; return; }
+
     // 時段篩選要擺在所有彙總之前 —— 被篩掉的注單不能進任何統計
     const sh = shiftOf(b.betTime);
     if (shiftFilter) {
-      if (!sh || sh.shift !== shiftFilter) { excludedByShift++; continue; }
+      if (!sh || sh.shift !== shiftFilter) { excludedByShift++; return; }
     }
 
     const u = b.username;
@@ -289,7 +269,14 @@ export async function GET(req: Request) {
       if (!ipMap.has(b.ip)) ipMap.set(b.ip, new Set());
       ipMap.get(b.ip)!.add(u);
     }
-  }
+  };
+
+  // 串流拉取：一頁一頁進來就地彙總，不累積原始行 → 翻幾百頁記憶體都不會爆
+  const stream = await streamBetOrders(
+    { platforms: plats, dateStart, dateEnd, username: username || undefined },
+    (batch) => { for (const raw of batch) consume(normalizeC(raw)); },
+  );
+  if (!stream.ok) return NextResponse.json({ error: stream.error }, { status: stream.status });
 
   const byMember = [...members.values()]
     .map(m => ({
@@ -322,16 +309,18 @@ export async function GET(req: Request) {
     }))
     .sort((a, b) => b.memberCount - a.memberCount);
 
-  // ── 彩種串號偵測 ──
-  // 後端的 lottery 參數會把「帶編號」的名稱映射到別的彩種（實測 排列五(15) → 排列三五、
-  // QQ分分彩(218) → QQ分分彩），而且 lottery-stats 與明細之間還有簡繁字差異（经/經）。
-  // 只要回來的彩種名跟查詢名對不上，這批數字就不能當成「該彩種」的數字用。
+  // ── 彩種比對結果 ──
+  // 改成本地字串完全相等比對後就不會再串號了（舊端點是後端做模糊映射才會串）。
+  // 但如果一筆都沒對上，多半是名稱寫法不同（簡繁 经/經、帶不帶編號），要講清楚而不是回個空表。
   let lotteryWarning: { queried: string; actual: string[] } | null = null;
-  if (lottery) {
-    const actual = [...new Set([...members.values()].flatMap(m => [...m.lotteries]))];
-    if (actual.length !== 1 || actual[0] !== lottery) {
-      lotteryWarning = { queried: lottery, actual };
-    }
+  if (lottery && counted === 0 && excludedByTarget > 0) {
+    // 列出這段期間實際存在、名稱最接近的彩種，讓使用者知道該怎麼填
+    const key = lottery.replace(/\(\d+\)\s*$/, '').trim();
+    const near = [...seenLotteries.entries()]
+      .filter(([n]) => n.includes(key) || key.includes(n.replace(/\(\d+\)\s*$/, '').trim()))
+      .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n, c]) => `${n}（${c} 筆）`);
+    const top = [...seenLotteries.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n, c]) => `${n}（${c} 筆）`);
+    lotteryWarning = { queried: lottery, actual: near.length ? near : top };
   }
 
   const SHIFT_ORDER: Record<string, number> = { 早: 0, 中: 1, 晚: 2 };
@@ -353,17 +342,19 @@ export async function GET(req: Request) {
 
   const payload = {
     summary: {
-      // records 是「實際計入統計」的筆數；有做時段篩選時會小於源頭回傳的總筆數
+      // records 是「實際計入統計」的筆數；有篩選時會小於源頭回傳的總筆數
       records: counted,
-      recordsFromSource: rows.length,
+      recordsFromSource: stream.records,
       shift: shiftFilter || null,
       excludedByShift,
-      truncated,
-      bytes,
-      // 這批資料是從哪支引擎來的：C = query-bet-orders（有分頁、欄位多）、v1 = 舊 member-bets
-      engine: sourceEngine,
-      pages,
-      capMessage: capMessage || null,
+      // 彩種/期號在本地精確比對時篩掉的筆數
+      excludedByTarget,
+      // truncated 只有在極端情況（後端 cursor 異常、翻頁超過防呆上限）才會是 true
+      truncated: stream.truncated,
+      bytes: stream.bytes,
+      engine: 'C',
+      pages: stream.pages,
+      capMessage: stream.capMessage || null,
       // C 引擎才有 real_earn；有的話一併回報，可與 housePnl 交叉核對
       realEarnSum: realEarnRows ? realEarnSum : null,
       realEarnRows,

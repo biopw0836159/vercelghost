@@ -4,10 +4,11 @@
 // 所以查歷史日期的注單時，這裡補回來的充值/返點/工資是「今天」或「本月」的數字，
 // 對應不到那一天。回傳一律帶 window 欄位，前端必須顯眼標示，不能讓人誤以為是查詢日的數據。
 //
-// B 引擎只能逐個會員查（實測 loginIds 陣列與不帶 loginId 都回 400），約 1 秒/人，
-// 所以這裡限量 + 併發，並如實回報查了幾個、幾個失敗。
+// B 引擎只能逐個會員查（實測 loginIds 陣列與不帶 loginId 都回 400），約 1 秒/人。
+// **不設人數上限** —— 這是篩選工具，不能因為慢就少查人；查多少人就等多久。
+// 靠併發把時間壓下來，並如實回報查了幾個、幾個失敗。
 //
-// Query：members=平台:帳號,平台:帳號…（最多 30 個）、window=today|month|lifetime（預設 today）
+// Query：members=平台:帳號,平台:帳號…、window=today|month|lifetime（預設 today）
 //        以及五條規則的門檻（全部選填，不填該條就不啟用）
 import { NextResponse } from 'next/server';
 import { fetchProfitLoss, type ProfitLossBlock } from '@/lib/engines';
@@ -15,8 +16,8 @@ import { cacheGet, cacheSet } from '@/lib/cache';
 
 export const runtime = 'nodejs';
 
-const MAX_MEMBERS = 30;
-const CONCURRENCY = 6;
+// 併發拉高以縮短總時間；上游有限流，開太大反而會被擋，10 是實測穩定的值
+const CONCURRENCY = 10;
 
 const numParam = (v: string | null): number | null => {
   if (v === null || v.trim() === '') return null;
@@ -52,8 +53,8 @@ export async function GET(req: Request) {
 
   if (!parsed.length) return NextResponse.json({ error: 'members 格式不對，應為 平台:帳號,平台:帳號' }, { status: 400 });
 
-  const capped = parsed.length > MAX_MEMBERS;
-  const list = parsed.slice(0, MAX_MEMBERS);
+  // 不截斷：給多少查多少
+  const list = parsed;
 
   // 五條規則門檻（沿用原本 B 引擎那五條的定義，見 docs/API-現狀.md 第五之二節）
   const th = {
@@ -127,7 +128,7 @@ export async function GET(req: Request) {
         : 'B 引擎只有 today/month/lifetime 三個窗口。這裡是「歷史累計」的數字，不是查詢日當天。',
     requested: parsed.length,
     queried: list.length,
-    capped,
+    capped: false,
     okCount,
     foundCount,
     thresholds: th,

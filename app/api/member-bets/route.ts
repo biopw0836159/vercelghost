@@ -22,9 +22,16 @@ const SAMPLE_LIMIT = 200;
 
 // ── 班別切分 ──
 // 早 08:00–16:00、中 16:00–24:00、晚 00:00–08:00（同一自然日切三段）。
-// 後端 bet_time 標的是 UTC（結尾 Z），但班別講的是當地時間，兩者要先對齊。
-// 時區偏移用環境變數調，預設 +8；回傳會附上每班實際的時間範圍，方便人工核對對不對。
-const SHIFT_TZ_OFFSET_HOURS = Number(process.env.SHIFT_TZ_OFFSET_HOURS ?? 8);
+//
+// 時區：後端 bet_time 結尾標 Z（看起來是 UTC），但實測證明它存的其實是「當地時間」。
+// 證據 —— 用開獎時段固定的彩種當標尺（2026-08-14 實測 8/12 資料）：
+//   经典重庆时时彩 字面值 10:01:00 ~ 次日 01:56:00，
+//     與該彩種公認的「每天 10:00 開盤、次日 02:00 收盤」完全吻合；
+//     若當成 UTC 再 +8 會變成 18:01 ~ 09:56，對不上。
+//   福彩3D（20:30 開獎）樣本 175/200 落在字面 21 時（投次日期），
+//     若 +8 會變成凌晨 5 點投注，不合理。
+// 所以預設偏移是 0：直接採用字面值。留這個環境變數是為了萬一後端哪天改成真 UTC。
+const SHIFT_TZ_OFFSET_HOURS = Number(process.env.SHIFT_TZ_OFFSET_HOURS ?? 0);
 
 function shiftOf(betTime: unknown): { date: string; shift: '早' | '中' | '晚' } | null {
   if (!betTime) return null;

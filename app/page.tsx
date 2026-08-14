@@ -264,11 +264,11 @@ export default function AuditDashboard() {
           <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="w-full border p-1 rounded mb-2 text-black" />
           <label className="block text-sm font-medium mb-1">Date End</label>
           <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} className="w-full border p-1 rounded text-black" />
-          {/* 後端一天的邊界在當地時間 11:00 左右，不是 00:00 —— 只查單日會少掉早班前段 */}
+          {/* 後端一天的邊界在當地時間 03:00 左右，不是 00:00 —— 只查單日會少掉晚班前段 */}
           {dateStart === dateEnd && (
             <div className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded p-1.5 leading-relaxed">
-              ⚠️ 只查一天會缺一段。後端一天的邊界在當地時間 <b>11:00</b> 左右（不是 00:00），
-              查單日拿到的是「當天 11:00 ～ 隔天 11:00」，早班 08:00–11:00 那段會落在前一天。
+              ⚠️ 只查一天會缺一段。後端一天的邊界在當地時間 <b>03:00</b> 左右（不是 00:00），
+              查單日拿到的是「當天 03:00 ～ 隔天 03:00」，晚班 00:00–03:00 那段會落在前一天。
               <button
                 type="button"
                 onClick={() => {
@@ -423,8 +423,10 @@ export default function AuditDashboard() {
             <div className="bg-white rounded-lg shadow border border-gray-200 p-4 mb-4">
               <div className="font-bold text-gray-700 mb-1">🕐 班別分布</div>
               <div className="text-xs text-gray-500 mb-3 leading-relaxed">
-                早 08:00–16:00、中 16:00–24:00、晚 00:00–08:00，以 UTC{off >= 0 ? '+' : ''}{off} 換算。
-                後端 <code>bet_time</code> 標的是 UTC，班別講的是當地時間，時區沒對齊就會整批切錯 ——
+                早 08:00–16:00、中 16:00–24:00、晚 00:00–08:00。
+                後端 <code>bet_time</code> 雖然標 <code>Z</code>，但實測存的是當地時間
+                （经典重庆时时彩字面值 10:01~次日 01:56，正是該彩種公認的開盤時段），
+                所以直接採用字面值{off !== 0 ? `，目前另外位移 ${off} 小時` : '、不做時區位移'}。
                 請對照最右邊的「實際時間範圍」確認切分正確。
                 {deepResult.summary?.recordsWithoutTime > 0 && (
                   <span className="text-orange-600 font-medium">

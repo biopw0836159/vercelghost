@@ -19,6 +19,25 @@ const num = (v: unknown): number => {
 
 const SAMPLE_LIMIT = 200;
 
+// ── 班別切分 ──
+// 早 08:00–16:00、中 16:00–24:00、晚 00:00–08:00（同一自然日切三段）。
+// 後端 bet_time 標的是 UTC（結尾 Z），但班別講的是當地時間，兩者要先對齊。
+// 時區偏移用環境變數調，預設 +8；回傳會附上每班實際的時間範圍，方便人工核對對不對。
+const SHIFT_TZ_OFFSET_HOURS = Number(process.env.SHIFT_TZ_OFFSET_HOURS ?? 8);
+
+function shiftOf(betTime: unknown): { date: string; shift: '早' | '中' | '晚' } | null {
+  if (!betTime) return null;
+  const t = new Date(String(betTime));
+  if (Number.isNaN(t.getTime())) return null;
+  // 位移後用 UTC 取值，等同於「換算成當地時間再取日期與小時」
+  const local = new Date(t.getTime() + SHIFT_TZ_OFFSET_HOURS * 3600000);
+  const h = local.getUTCHours();
+  return {
+    date: local.toISOString().slice(0, 10),
+    shift: h < 8 ? '晚' : h < 16 ? '早' : '中',
+  };
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const username = searchParams.get('username')?.trim() || '';
@@ -51,9 +70,14 @@ export async function GET(req: Request) {
     bets: number; betAmount: number; winAmount: number; wins: number;
     firstBet: string; lastBet: string;
   };
+  type ShiftAgg = {
+    date: string; shift: string; bets: number; betAmount: number; winAmount: number;
+    members: Set<string>; firstBet: string; lastBet: string;
+  };
   const members = new Map<string, Agg>();
   const ipMap = new Map<string, Set<string>>();
-  let betAmount = 0, winAmount = 0, wins = 0;
+  const shifts = new Map<string, ShiftAgg>();
+  let betAmount = 0, winAmount = 0, wins = 0, noTime = 0;
 
   for (const b of r.rows) {
     const u = String(b.username ?? '-');
@@ -61,6 +85,29 @@ export async function GET(req: Request) {
     const win = num(b.win_amount);
     const isWin = String(b.state ?? '').toUpperCase() === 'WIN';
     betAmount += amt; winAmount += win; if (isWin) wins++;
+
+    // 班別彙總
+    const sh = shiftOf(b.bet_time);
+    if (!sh) {
+      noTime++;
+    } else {
+      const key = `${sh.date}|${sh.shift}`;
+      let sa = shifts.get(key);
+      if (!sa) {
+        sa = {
+          date: sh.date, shift: sh.shift, bets: 0, betAmount: 0, winAmount: 0,
+          members: new Set(), firstBet: String(b.bet_time), lastBet: String(b.bet_time),
+        };
+        shifts.set(key, sa);
+      }
+      sa.bets++;
+      sa.betAmount += amt;
+      sa.winAmount += win;
+      sa.members.add(u);
+      const t = String(b.bet_time);
+      if (t < sa.firstBet) sa.firstBet = t;
+      if (t > sa.lastBet) sa.lastBet = t;
+    }
 
     let m = members.get(u);
     if (!m) {
@@ -121,6 +168,23 @@ export async function GET(req: Request) {
     }))
     .sort((a, b) => b.memberCount - a.memberCount);
 
+  const SHIFT_ORDER: Record<string, number> = { 早: 0, 中: 1, 晚: 2 };
+  const byShift = [...shifts.values()]
+    .map(s => ({
+      date: s.date,
+      shift: s.shift,
+      bets: s.bets,
+      betAmount: s.betAmount,
+      winAmount: s.winAmount,
+      housePnl: s.betAmount - s.winAmount,
+      memberCount: s.members.size,
+      firstBet: s.firstBet,
+      lastBet: s.lastBet,
+    }))
+    .sort((a, b) => a.date === b.date
+      ? (SHIFT_ORDER[a.shift] ?? 9) - (SHIFT_ORDER[b.shift] ?? 9)
+      : a.date < b.date ? -1 : 1);
+
   return NextResponse.json({
     summary: {
       records: r.rows.length,
@@ -133,8 +197,12 @@ export async function GET(req: Request) {
       // 莊家視角（跟 A 引擎的「盈虧」同方向）
       housePnl: betAmount - winAmount,
       winRecords: wins,
+      // 班別切分用的時區偏移，以及沒有有效 bet_time 而無法歸班的筆數
+      shiftTzOffsetHours: SHIFT_TZ_OFFSET_HOURS,
+      recordsWithoutTime: noTime,
       query: { username, lottery, cycleValue, dateStart, dateEnd },
     },
+    byShift,
     byMember,
     byIp,
     sample: r.rows.slice(0, SAMPLE_LIMIT),

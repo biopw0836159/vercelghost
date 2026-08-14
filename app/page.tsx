@@ -380,6 +380,61 @@ export default function AuditDashboard() {
           </div>
         )}
 
+        {/* 班別分布 —— 用注單明細的 bet_time 自己切，後端沒有小時粒度的介面 */}
+        {activeEngine === 'B' && deepResult?.byShift?.length > 0 && (() => {
+          const off = deepResult.summary?.shiftTzOffsetHours ?? 8;
+          // 把 UTC 時間換算成班別用的當地時間再顯示，讓人能核對切分對不對
+          const local = (iso: string) => {
+            if (!iso) return '-';
+            const t = new Date(iso);
+            if (isNaN(t.getTime())) return '-';
+            return new Date(t.getTime() + off * 3600000).toISOString().slice(0, 19).replace('T', ' ');
+          };
+          return (
+            <div className="bg-white rounded-lg shadow border border-gray-200 p-4 mb-4">
+              <div className="font-bold text-gray-700 mb-1">🕐 班別分布</div>
+              <div className="text-xs text-gray-500 mb-3 leading-relaxed">
+                早 08:00–16:00、中 16:00–24:00、晚 00:00–08:00，以 UTC{off >= 0 ? '+' : ''}{off} 換算。
+                後端 <code>bet_time</code> 標的是 UTC，班別講的是當地時間，時區沒對齊就會整批切錯 ——
+                請對照最右邊的「實際時間範圍」確認切分正確。
+                {deepResult.summary?.recordsWithoutTime > 0 && (
+                  <span className="text-orange-600 font-medium">
+                    　有 {deepResult.summary.recordsWithoutTime} 筆沒有有效時間，未歸入任何班別。
+                  </span>
+                )}
+              </div>
+              <table className="w-full text-sm text-left whitespace-nowrap">
+                <thead className="bg-gray-100 border-b">
+                  <tr>
+                    <th className="p-2 font-bold text-gray-600">日期</th>
+                    <th className="p-2 font-bold text-gray-600">班別</th>
+                    <th className="p-2 font-bold text-gray-600">注單</th>
+                    <th className="p-2 font-bold text-gray-600">會員</th>
+                    <th className="p-2 font-bold text-gray-600">投注</th>
+                    <th className="p-2 font-bold text-gray-600">派彩</th>
+                    <th className="p-2 font-bold text-gray-600">莊家盈虧</th>
+                    <th className="p-2 font-bold text-gray-600">實際時間範圍（當地）</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deepResult.byShift.map((s: any) => (
+                    <tr key={`${s.date}|${s.shift}`} className="border-b hover:bg-blue-50">
+                      <td className="p-2">{s.date}</td>
+                      <td className="p-2 font-bold">{s.shift}</td>
+                      <td className="p-2">{s.bets}</td>
+                      <td className="p-2">{s.memberCount}</td>
+                      <td className="p-2">{fmtMoney(s.betAmount)}</td>
+                      <td className="p-2">{fmtMoney(s.winAmount)}</td>
+                      <td className={`p-2 font-bold ${s.housePnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{fmtMoney(s.housePnl)}</td>
+                      <td className="p-2 text-xs font-mono text-gray-500">{local(s.firstBet)} ~ {local(s.lastBet)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
+
         {/* 同 IP 多帳號 —— 機房 IP 會讓幾十個不相干的人共用一個出口，必須分開看 */}
         {activeEngine === 'B' && deepResult?.byIp?.length > 0 && (() => {
           const home = deepResult.byIp.filter((x: any) => !x.datacenter);

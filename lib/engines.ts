@@ -117,7 +117,12 @@ export async function fetchProfitLoss(
 // ── C 引擎：注單明細（cursor 分頁，串流式）──
 export type BetOrder = Record<string, unknown>;
 export type StreamResult =
-  | { ok: true; pages: number; records: number; bytes: number; truncated: boolean; capMessage: string }
+  | {
+      ok: true; pages: number; records: number; bytes: number;
+      truncated: boolean; capMessage: string;
+      // 中途失敗導致提前結束時，把原因帶出來 —— 少了資料一定要講，不能默默給一份不完整的
+      stoppedReason: string | null; retries: number;
+    }
   | { ok: false; status: number; error: string };
 
 /**
@@ -148,17 +153,32 @@ export async function streamBetOrders(
   let bytes = 0;
   let truncated = false;
   let capMessage = '';
+  let stoppedReason: string | null = null;
+  let retries = 0;
+
+  // 上游偶爾會抽風（實測線上翻到第 101 頁時單頁失敗）。一頁掉了就少一截資料，
+  // 對「不能失真」的要求是不可接受的，所以每頁重試到底再放棄。
+  const PAGE_RETRIES = 4;
 
   for (;;) {
     const body: Record<string, unknown> = { platforms, dateStart, dateEnd, limit: 5000 };
     if (username) body.username = username;
     if (cursor) body.cursor = cursor;
 
-    // 單頁保護：正常一頁約 2.5MB，給 80MB 是為了擋後端異常回應，不是拿來限制資料量
-    const r = await postEngine('/api/query-bet-orders', body, 80 * 1024 * 1024);
+    let r = await postEngine('/api/query-bet-orders', body, 80 * 1024 * 1024);
+    for (let attempt = 1; !r.ok && attempt <= PAGE_RETRIES; attempt++) {
+      retries++;
+      // 退避：1s、2s、4s、8s，給上游喘息也避開瞬間限流
+      await new Promise(res => setTimeout(res, 1000 * 2 ** (attempt - 1)));
+      r = await postEngine('/api/query-bet-orders', body, 80 * 1024 * 1024);
+    }
     if (!r.ok) {
-      // 已經聚合了一部分就先回並標記不完整；完全沒拿到才當失敗
-      if (records > 0) { truncated = true; break; }
+      // 重試到底仍失敗：已聚合的先回並標記不完整＋講明原因；完全沒拿到才當整體失敗
+      if (records > 0) {
+        truncated = true;
+        stoppedReason = `第 ${pages + 1} 頁重試 ${PAGE_RETRIES} 次仍失敗：${r.error}`;
+        break;
+      }
       return r;
     }
     pages++;
@@ -171,9 +191,13 @@ export async function streamBetOrders(
     if (d.capMessage) capMessage = String(d.capMessage);
 
     if (!d.hasMore || !d.nextCursor) break;
-    if (pages >= maxPages) { truncated = true; break; }
+    if (pages >= maxPages) {
+      truncated = true;
+      stoppedReason = `翻頁達防呆上限 ${maxPages} 頁`;
+      break;
+    }
     cursor = d.nextCursor;
   }
 
-  return { ok: true, pages, records, bytes, truncated, capMessage };
+  return { ok: true, pages, records, bytes, truncated, capMessage, stoppedReason, retries };
 }

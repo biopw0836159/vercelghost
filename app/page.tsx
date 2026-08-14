@@ -514,9 +514,18 @@ export default function AuditDashboard() {
                 )}
                 <div className="text-xs text-gray-500">🔸 回應體 {(deepResult.summary.bytes / 1048576).toFixed(1)}MB</div>
                 {deepResult.summary.truncated && (
-                  <div className="mt-2 p-2 bg-red-100 border border-red-400 rounded text-red-700 font-bold">
-                    ⚠️ 撞到後端 10000 筆上限，這批資料<b>不完整</b>，上面的金額全部偏低。
-                    請縮短日期區間、或改查單一會員帳號。
+                  <div className="mt-2 p-2 bg-red-100 border border-red-400 rounded text-red-700">
+                    <b>⚠️ 這批資料不完整，上面的金額偏低，不要直接拿去下判斷。</b>
+                    <div className="mt-1 font-normal">
+                      原因：{deepResult.summary.stoppedReason || '未知'}
+                      <br />
+                      重跑一次通常就會拿到完整資料（同條件會重新拉，不吃快取的不完整結果）。
+                    </div>
+                  </div>
+                )}
+                {!deepResult.summary.truncated && deepResult.summary.retries > 0 && (
+                  <div className="text-xs text-gray-500">
+                    🔸 中途上游有 {deepResult.summary.retries} 次請求失敗，已自動重試成功，資料完整
                   </div>
                 )}
                 {deepResult.summary.lotteryWarning && (

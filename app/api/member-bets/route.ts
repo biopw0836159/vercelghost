@@ -274,7 +274,10 @@ export async function GET(req: Request) {
   };
 
   // 把彙總結果組成回應，串流模式與一般模式共用
-  const buildPayload = (stream: { pages: number; records: number; bytes: number; truncated: boolean; capMessage: string }) => {
+  const buildPayload = (stream: {
+    pages: number; records: number; bytes: number; truncated: boolean;
+    capMessage: string; stoppedReason?: string | null; retries?: number;
+  }) => {
   const byMember = [...members.values()]
     .map(m => ({
       username: m.username,
@@ -346,8 +349,11 @@ export async function GET(req: Request) {
       excludedByShift,
       // 彩種/期號在本地精確比對時篩掉的筆數
       excludedByTarget,
-      // truncated 只有在極端情況（後端 cursor 異常、翻頁超過防呆上限）才會是 true
+      // truncated = 這批資料不完整。正常查詢是 false；為 true 時 stoppedReason 會說明原因
       truncated: stream.truncated,
+      stoppedReason: stream.stoppedReason ?? null,
+      // 中途重試次數（上游偶爾抽風，重試成功不影響完整性，但值得知道）
+      retries: stream.retries ?? 0,
       bytes: stream.bytes,
       engine: 'C',
       pages: stream.pages,
@@ -403,7 +409,8 @@ export async function GET(req: Request) {
           );
           if (!st.ok) { send({ type: 'error', error: st.error }); controller.close(); return; }
           const payload = buildPayload(st);
-          cacheSet(cacheKey, payload, ttlFor(dateEnd));
+          // 不完整的結果絕不進快取 —— 否則重跑只會一直拿到同一份殘缺資料
+          if (!st.truncated) cacheSet(cacheKey, payload, ttlFor(dateEnd));
           send({ type: 'result', ...payload });
         } catch (e) {
           send({ type: 'error', error: (e as Error).message });
@@ -429,6 +436,6 @@ export async function GET(req: Request) {
   if (!stream.ok) return NextResponse.json({ error: stream.error }, { status: stream.status });
 
   const payload = buildPayload(stream);
-  cacheSet(cacheKey, payload, ttlFor(dateEnd));
+  if (!stream.truncated) cacheSet(cacheKey, payload, ttlFor(dateEnd));
   return NextResponse.json(payload, { headers: { 'x-cache': 'MISS' } });
 }

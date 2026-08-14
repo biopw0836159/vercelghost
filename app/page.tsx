@@ -84,6 +84,18 @@ export default function AuditDashboard() {
   // B 引擎（定向深查）：後端 member-bets 至少要指定一個對象，不能只給日期
   // 時段篩選：空字串 = 全部時段。班別定義同下方 DeepInput 區的說明。
   const [deepShift, setDeepShift] = useState('');
+  // B 引擎（會員盈虧）：補充值/返點/工資，並套用原本那五條抓鬼規則。
+  // ⚠ B 引擎只有 today/month/lifetime 三個窗口，不支援任意日期 —— 查歷史日期時對應不上。
+  const [enrichWindow, setEnrichWindow] = useState('today');
+  const [enrichData, setEnrichData] = useState<Record<string, any> | null>(null);
+  const [enrichNote, setEnrichNote] = useState('');
+  const [enrichLoading, setEnrichLoading] = useState(false);
+  const [enrichErr, setEnrichErr] = useState('');
+  const [rules, setRules] = useState({
+    ratioHigh: '50', r1SalesMin: '30000', r1SalesMax: '',
+    ratioLow: '2', r2DepositMin: '1000', r2DepositMax: '2000',
+    treatmentMin: '50000', profitMin: '100000', r5SalesMin: '5000',
+  });
   const [deepUser, setDeepUser] = useState('');
   const [deepLottery, setDeepLottery] = useState('');
   const [deepCycle, setDeepCycle] = useState('');
@@ -237,6 +249,36 @@ export default function AuditDashboard() {
     }
   };
 
+  // 對目前表格裡的會員逐個補 B 引擎資料（充值/返點/工資），並套用五條規則。
+  // B 引擎只能逐個查（約 1 秒/人），所以限量 30 人、由使用者按鈕觸發，不自動跑。
+  const enrichMembers = async () => {
+    setEnrichLoading(true);
+    setEnrichErr('');
+    try {
+      const targets = filteredData.slice(0, 30)
+        .map((m: any) => `${(m.platform || '').split(',')[0]}:${m.username}`)
+        .filter((s: string) => !s.startsWith(':') && !s.endsWith(':'));
+      if (!targets.length) throw new Error('目前表格沒有可查的會員');
+
+      const q = new URLSearchParams({ members: targets.join(','), window: enrichWindow });
+      for (const [k, v] of Object.entries(rules)) if (String(v).trim() !== '') q.set(k, String(v).trim());
+
+      const res = await fetch(`/api/member-enrich?${q.toString()}`, { headers: { Accept: 'application/json' } });
+      const json = await res.json();
+      if (!res.ok || json?.error) throw new Error(json?.error || `連線異常 (${res.status})`);
+
+      const map: Record<string, any> = {};
+      for (const m of json.members || []) map[m.username] = m;
+      setEnrichData(map);
+      setEnrichNote(`${json.windowNote}　（查了 ${json.queried} 人，成功 ${json.okCount}、查到資料 ${json.foundCount}${json.capped ? '；超過 30 人已截斷' : ''}）`);
+    } catch (e: any) {
+      setEnrichErr(e.message);
+      setEnrichData(null);
+    } finally {
+      setEnrichLoading(false);
+    }
+  };
+
   const toggleCheck = (id: string) => {
     const newChecked = new Set(checkedItems);
     if (newChecked.has(id)) newChecked.delete(id);
@@ -327,9 +369,51 @@ export default function AuditDashboard() {
             <DeepInput label="會員帳號" hint="例如 lh838366" value={deepUser} onChange={setDeepUser} />
             <DeepInput label="彩種" hint="例如 東京1.5分彩" value={deepLottery} onChange={setDeepLottery} />
             <DeepInput label="期號" hint="例如 202608130360" value={deepCycle} onChange={setDeepCycle} />
-            <div className="text-xs text-gray-500 px-1 leading-relaxed">
-              查單一會員最快且數字完整。查大彩種可能超過 60MB 上限被擋下，
-              那時候改用更短的日期區間。
+            <div className="text-xs text-gray-500 px-1 leading-relaxed mb-4">
+              查會員帳號走 C 引擎（有分頁、欄位多、較快）；查彩種或期號走舊端點，
+              可能串到別的彩種，結果會標紅字說明。
+            </div>
+
+            <div className="border-t border-gray-300 pt-3">
+              <div className="font-bold text-sm text-gray-700 mb-1">B 引擎（充值/返點/工資）</div>
+              <div className="text-xs text-gray-500 mb-2 leading-relaxed">
+                查完注單後，可對表格裡的會員逐個補 B 引擎資料，並套用下面五條規則。
+                <span className="text-orange-700 font-medium">
+                  ⚠ B 引擎只有 today / month / lifetime 三個窗口，不吃任意日期 ——
+                  查歷史日期時這些數字對應不到那一天。
+                </span>
+              </div>
+              <label className="block text-xs font-medium mb-1 text-gray-700">B 引擎窗口</label>
+              <select value={enrichWindow} onChange={e => setEnrichWindow(e.target.value)}
+                className="w-full border p-2 rounded text-black bg-white mb-2 text-sm">
+                <option value="today">今天 today</option>
+                <option value="month">本月 month</option>
+                <option value="lifetime">歷史累計 lifetime</option>
+              </select>
+
+              <details className="mb-2">
+                <summary className="text-xs text-blue-600 cursor-pointer select-none">五條規則門檻（留空 = 不啟用該條）</summary>
+                <div className="mt-2 space-y-1.5">
+                  {([
+                    ['ratioHigh', '① 充銷比 ≥'], ['r1SalesMin', '　 銷量 ≥'], ['r1SalesMax', '　 銷量 ≤'],
+                    ['ratioLow', '② 充銷比 ≤'], ['r2DepositMin', '　 充值 ≥'], ['r2DepositMax', '　 充值 ≤'],
+                    ['treatmentMin', '③ 返點 ≥'], ['profitMin', '④ 會員盈虧 ≥'], ['r5SalesMin', '⑤ 無充值·銷量 ≥'],
+                  ] as [keyof typeof rules, string][]).map(([k, label]) => (
+                    <div key={k} className="flex items-center gap-2">
+                      <label className="text-xs text-gray-600 w-28 shrink-0">{label}</label>
+                      <input type="number" value={rules[k]}
+                        onChange={e => setRules(prev => ({ ...prev, [k]: e.target.value }))}
+                        className="flex-1 border p-1 rounded text-black text-xs" />
+                    </div>
+                  ))}
+                </div>
+              </details>
+
+              <button onClick={enrichMembers} disabled={enrichLoading || !hasQueried}
+                className="w-full bg-emerald-700 text-white py-2 rounded hover:bg-emerald-800 disabled:opacity-50 text-sm">
+                {enrichLoading ? '查詢中…' : '補 B 引擎資料（最多 30 人）'}
+              </button>
+              {enrichErr && <div className="mt-2 text-xs text-red-600">{enrichErr}</div>}
             </div>
           </div>
         )}
@@ -368,6 +452,19 @@ export default function AuditDashboard() {
                 </div>
                 {deepResult.summary.spanFirst && (
                   <div>🔸 源頭實際涵蓋：<b>{deepResult.summary.spanFirst.slice(0, 19).replace('T', ' ')}</b> ～ <b>{deepResult.summary.spanLast.slice(0, 19).replace('T', ' ')}</b></div>
+                )}
+                <div className="text-xs text-gray-500">
+                  🔸 資料源：{deepResult.summary.engine === 'C' ? `C 引擎（翻了 ${deepResult.summary.pages} 頁）` : '舊 member-bets 端點'}
+                  {deepResult.summary.cancelled > 0 && (
+                    <span className="ml-2 text-orange-700">
+                      · 含 {deepResult.summary.cancelled} 筆撤單（投注 {fmtMoney(deepResult.summary.cancelledAmount)}，源頭已計入上面金額）
+                    </span>
+                  )}
+                </div>
+                {enrichNote && (
+                  <div className="mt-2 p-2 bg-emerald-50 border border-emerald-300 rounded text-xs text-emerald-900 leading-relaxed">
+                    <b>B 引擎資料（{deepResult.summary ? enrichWindow : ''}）：</b>{enrichNote}
+                  </div>
                 )}
                 <div className="text-xs text-gray-500">🔸 回應體 {(deepResult.summary.bytes / 1048576).toFixed(1)}MB</div>
                 {deepResult.summary.truncated && (
@@ -531,6 +628,13 @@ export default function AuditDashboard() {
                   <th className="p-4 font-bold text-gray-600">會員帳號</th>
                   <th className="p-4 font-bold text-gray-600">彩種數</th>
                   <th className="p-4 font-bold text-gray-600">IP</th>
+                  {enrichData && <>
+                    <th className="p-4 font-bold text-emerald-700">充值</th>
+                    <th className="p-4 font-bold text-emerald-700">返點</th>
+                    <th className="p-4 font-bold text-emerald-700">工資</th>
+                    <th className="p-4 font-bold text-emerald-700">充銷比</th>
+                    <th className="p-4 font-bold text-emerald-700">命中規則</th>
+                  </>}
                 </>}
                 {activeEngine === 'A' ? (
                   <><th className="p-4 font-bold text-gray-600">投注金額</th><th className="p-4 font-bold text-gray-600">獎金</th><th className="p-4 font-bold text-gray-600">返點</th><th className="p-4 font-bold text-gray-600">盈虧</th><th className="p-4 font-bold text-gray-600">RTP</th></>
@@ -580,6 +684,27 @@ export default function AuditDashboard() {
                       <td className="p-4 text-xs font-mono text-gray-600" title={item.ips?.join('\n')}>
                         {item.ipCount === 1 ? item.ips[0] : `${item.ipCount} 個`}
                       </td>
+                      {enrichData && (() => {
+                        const e = enrichData[item.username];
+                        if (!e) return <><td className="p-4 text-gray-400" colSpan={5}>未查</td></>;
+                        if (!e.ok) return <><td className="p-4 text-red-500 text-xs" colSpan={5}>{e.error}</td></>;
+                        if (!e.found) return <><td className="p-4 text-gray-400 text-xs" colSpan={5}>B 引擎查無此帳號</td></>;
+                        return <>
+                          <td className="p-4">{fmtMoney(e.deposit)}</td>
+                          <td className="p-4">{fmtMoney(e.treatment)}</td>
+                          <td className="p-4">{fmtMoney(e.activity)}</td>
+                          <td className="p-4">{e.ratio === null ? <span className="text-gray-400">充值 0</span> : e.ratio}</td>
+                          <td className="p-4">
+                            {e.matched?.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {e.matched.map((r: string, i: number) => (
+                                  <span key={i} className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold whitespace-nowrap">{r}</span>
+                                ))}
+                              </div>
+                            ) : <span className="text-gray-400 text-xs">—</span>}
+                          </td>
+                        </>;
+                      })()}
                     </>}
                     {activeEngine === 'A' ? (
                       <><td className="p-4">{fmtMoney(item.totalSales)}</td><td className="p-4">{fmtMoney(item.bonus)}</td><td className="p-4">{fmtMoney(item.treatment)}</td>

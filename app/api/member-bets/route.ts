@@ -1,12 +1,22 @@
-// GET /api/member-bets —— B 引擎（定向深查）同源代理 + 伺服器端彙總
+// GET /api/member-bets —— 注單定向深查，伺服器端彙總
 //
-// 為什麼要在伺服器端就彙總完：後端注單明細單次回應實測可達 264MB，
+// 為什麼要在伺服器端就彙總完：注單明細單次回應實測可達 264MB，
 // 原封不動丟給瀏覽器會直接卡死，所以這裡只回彙總結果 + 少量樣本明細。
 //
+// ── 兩條資料源，依查詢對象自動分流（2026-08-14 實測後改）──
+//   查會員 → C 引擎 POST /api/query-bet-orders
+//     每頁 5000 筆可用 cursor 翻到底（無 1 萬筆硬上限）、同一查詢快 3 倍、
+//     且多回 real_earn（真實盈虧）/ bet_content（投注內容）/ open_code（開獎號）/ win_count。
+//     限制：platforms 必填（省略、空陣列、'ALL' 都回 400 或 0 筆），且不吃 lottery / cycle_value。
+//   查彩種或期號 → 舊的 GET /api/v1/member-bets
+//     C 引擎沒有這兩個參數，只能繼續走這支；它會串彩種、也有 1 萬筆硬上限，
+//     所以結果一律附上串號警告與截斷警告。
+//
 // Query：username / lottery / cycleValue 至少給一個，加上 dateStart、dateEnd（yyyy-MM-dd）
-// 注意後端 /api/v1/* 用底線參數（date_start），跟 /api/open/* 的小駝峰不同。
+//        platform（選填，查會員時指定可省一次平台清單查詢）、shift（早/中/晚，選填）
 import { NextResponse } from 'next/server';
-import { fetchOpenApiLarge } from '@/lib/open-api';
+import { fetchOpenApi, fetchOpenApiLarge } from '@/lib/open-api';
+import { fetchBetOrders } from '@/lib/engines';
 import { isDatacenterIp } from '@/lib/ip-class';
 import { cacheGet, cacheSet, ttlFor } from '@/lib/cache';
 
@@ -32,6 +42,76 @@ const SAMPLE_LIMIT = 200;
 //     若 +8 會變成凌晨 5 點投注，不合理。
 // 所以預設偏移是 0：直接採用字面值。留這個環境變數是為了萬一後端哪天改成真 UTC。
 const SHIFT_TZ_OFFSET_HOURS = Number(process.env.SHIFT_TZ_OFFSET_HOURS ?? 0);
+
+// C 引擎的 platforms 必填。清單不寫死 —— 平台會增減（TD 就是 2026-08 才加的），
+// 寫死會在新平台上線時靜默少算。改從 lottery-stats 當期實際有資料的平台推導。
+async function resolvePlatforms(explicit: string, dateStart: string, dateEnd: string): Promise<string[] | null> {
+  if (explicit) {
+    const list = explicit.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    if (list.length) return list;
+  }
+  const key = `platforms|${dateStart}|${dateEnd}`;
+  const cached = cacheGet<string[]>(key);
+  if (cached) return cached;
+
+  const r = await fetchOpenApi('/api/open/lottery-stats', { platform: 'ALL', dateStart, dateEnd });
+  if (!r.ok) return null;
+  const list = [...new Set(
+    r.rows.map((x: Record<string, unknown>) => String(x['平台'] ?? x['platform'] ?? '').trim()).filter(Boolean),
+  )];
+  if (!list.length) return null;
+  cacheSet(key, list, ttlFor(dateEnd));
+  return list;
+}
+
+// 兩個引擎欄位名不同，先正規化成同一種形狀再進彙總，下游邏輯不用各寫一套
+type Bet = {
+  username: string; platform: string; ip: string; lottery: string;
+  playType: string; cycleValue: string; betAmount: number; winAmount: number;
+  status: string; isWin: boolean; betTime: string;
+  realEarn: number | null; betContent: string | null; openCode: string | null;
+};
+
+function normalizeC(b: Record<string, unknown>): Bet {
+  // 判中獎一定要看 status_str（= 舊引擎的 state），不能用 win_count ——
+  // 實測 win_count 整批都是 0（772 筆全 0），而 status_str 的 WIN 有 160 筆、
+  // 與舊引擎 state 的分布完全一致（NOPRIZE 609 / WIN 160 / CANCEL 3）。
+  const status = String(b.status_str ?? '').toUpperCase();
+  return {
+    username: String(b.username ?? '-'),
+    platform: String(b.platform ?? '-'),
+    ip: String(b.user_ip ?? '').trim(),
+    lottery: String(b.lottery ?? ''),
+    playType: String(b.play_name || b.play_type || ''),
+    cycleValue: String(b.cycle_value ?? ''),
+    betAmount: num(b.bet_amount),
+    winAmount: num(b.win_amount),
+    status,
+    isWin: status === 'WIN',
+    betTime: String(b.bet_time ?? ''),
+    realEarn: b.real_earn === undefined || b.real_earn === null || b.real_earn === '' ? null : num(b.real_earn),
+    betContent: b.bet_content ? String(b.bet_content) : null,
+    openCode: b.open_code ? String(b.open_code) : null,
+  };
+}
+
+function normalizeV1(b: Record<string, unknown>): Bet {
+  const status = String(b.state ?? '').toUpperCase();
+  return {
+    username: String(b.username ?? '-'),
+    platform: String(b.platform ?? '-'),
+    ip: String(b.user_ip ?? '').trim(),
+    lottery: String(b.lottery ?? ''),
+    playType: String(b.play_type || b.play_name || ''),
+    cycleValue: String(b.cycle_value ?? ''),
+    betAmount: num(b.bet_amount),
+    winAmount: num(b.win_amount),
+    status,
+    isWin: status === 'WIN',
+    betTime: String(b.bet_time ?? ''),
+    realEarn: null, betContent: null, openCode: null,
+  };
+}
 
 function shiftOf(betTime: unknown): { date: string; shift: '早' | '中' | '晚' } | null {
   if (!betTime) return null;
@@ -69,18 +149,52 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'shift 只能是 早 / 中 / 晚，或不傳代表全部時段' }, { status: 400 });
   }
 
+  const platformParam = (searchParams.get('platform') || '').trim();
+
   // 彙總後的結果不大（幾十 KB），但拉明細本身要好幾秒，同條件重複查直接給快取
-  const cacheKey = `member-bets|${username}|${lottery}|${cycleValue}|${dateStart}|${dateEnd}|${shiftFilter}`;
+  const cacheKey = `member-bets|${username}|${lottery}|${cycleValue}|${dateStart}|${dateEnd}|${shiftFilter}|${platformParam}`;
   const cached = cacheGet<unknown>(cacheKey);
   if (cached) return NextResponse.json(cached, { headers: { 'x-cache': 'HIT' } });
 
-  const params: Record<string, string> = { date_start: dateStart, date_end: dateEnd };
-  if (username) params.username = username;
-  if (lottery) params.lottery = lottery;
-  if (cycleValue) params.cycle_value = cycleValue;
+  // ── 依查詢對象分流資料源 ──
+  let rows: Bet[];
+  let sourceEngine: 'C' | 'v1';
+  let truncated: boolean;
+  let bytes: number;
+  let pages = 0;
+  let capMessage = '';
 
-  const r = await fetchOpenApiLarge('/api/v1/member-bets', params);
-  if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
+  if (username && !lottery && !cycleValue) {
+    // 查會員 → C 引擎（有分頁、欄位多、較快）
+    const plats = await resolvePlatforms(platformParam, dateStart, dateEnd);
+    if (!plats) {
+      return NextResponse.json(
+        { error: '取不到平台清單（C 引擎的 platforms 必填）。請在 platform 參數指定平台，或稍後再試。' },
+        { status: 502 },
+      );
+    }
+    const c = await fetchBetOrders({ platforms: plats, dateStart, dateEnd, username });
+    if (!c.ok) return NextResponse.json({ error: c.error }, { status: c.status });
+    rows = c.records.map(normalizeC);
+    sourceEngine = 'C';
+    truncated = c.truncated;
+    bytes = c.bytes;
+    pages = c.pages;
+    capMessage = c.capMessage;
+  } else {
+    // 查彩種 / 期號 → C 引擎沒有這兩個參數，只能走舊端點
+    const params: Record<string, string> = { date_start: dateStart, date_end: dateEnd };
+    if (username) params.username = username;
+    if (lottery) params.lottery = lottery;
+    if (cycleValue) params.cycle_value = cycleValue;
+
+    const r = await fetchOpenApiLarge('/api/v1/member-bets', params);
+    if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
+    rows = r.rows.map(normalizeV1);
+    sourceEngine = 'v1';
+    truncated = r.truncated;
+    bytes = r.bytes;
+  }
 
   // ── 彙總到會員維度 ──
   type Agg = {
@@ -103,22 +217,28 @@ export async function GET(req: Request) {
   // 不要替使用者湊自然日，一切以源頭給什麼為準。
   let spanFirst = '', spanLast = '';
 
-  for (const b of r.rows) {
+  // C 引擎有 real_earn（後端算好的真實盈虧），有就用它，比自己拿派彩減投注準
+  let realEarnSum = 0, realEarnRows = 0;
+  // 撤單：源頭把 CANCEL 的注單也算進投注額裡，照源頭不動，但要標出來讓人知道
+  let cancelled = 0, cancelledAmount = 0;
+
+  for (const b of rows) {
     // 時段篩選要擺在所有彙總之前 —— 被篩掉的注單不能進任何統計
-    const sh = shiftOf(b.bet_time);
+    const sh = shiftOf(b.betTime);
     if (shiftFilter) {
       if (!sh || sh.shift !== shiftFilter) { excludedByShift++; continue; }
     }
 
-    const u = String(b.username ?? '-');
-    const amt = num(b.bet_amount);
-    const win = num(b.win_amount);
-    const isWin = String(b.state ?? '').toUpperCase() === 'WIN';
+    const u = b.username;
+    const amt = b.betAmount;
+    const win = b.winAmount;
     counted++;
-    if (sampleRows.length < SAMPLE_LIMIT) sampleRows.push(b);
-    betAmount += amt; winAmount += win; if (isWin) wins++;
+    if (sampleRows.length < SAMPLE_LIMIT) sampleRows.push(b as unknown as Record<string, unknown>);
+    betAmount += amt; winAmount += win; if (b.isWin) wins++;
+    if (b.status === 'CANCEL') { cancelled++; cancelledAmount += amt; }
+    if (b.realEarn !== null) { realEarnSum += b.realEarn; realEarnRows++; }
 
-    const bt = String(b.bet_time ?? '');
+    const bt = b.betTime;
     if (bt) {
       if (!spanFirst || bt < spanFirst) spanFirst = bt;
       if (!spanLast || bt > spanLast) spanLast = bt;
@@ -133,7 +253,7 @@ export async function GET(req: Request) {
       if (!sa) {
         sa = {
           date: sh.date, shift: sh.shift, bets: 0, betAmount: 0, winAmount: 0,
-          members: new Set(), firstBet: String(b.bet_time), lastBet: String(b.bet_time),
+          members: new Set(), firstBet: bt, lastBet: bt,
         };
         shifts.set(key, sa);
       }
@@ -141,9 +261,8 @@ export async function GET(req: Request) {
       sa.betAmount += amt;
       sa.winAmount += win;
       sa.members.add(u);
-      const t = String(b.bet_time);
-      if (t < sa.firstBet) sa.firstBet = t;
-      if (t > sa.lastBet) sa.lastBet = t;
+      if (bt < sa.firstBet) sa.firstBet = bt;
+      if (bt > sa.lastBet) sa.lastBet = bt;
     }
 
     let m = members.get(u);
@@ -151,26 +270,24 @@ export async function GET(req: Request) {
       m = {
         username: u, platforms: new Set(), lotteries: new Set(), ips: new Set(),
         bets: 0, betAmount: 0, winAmount: 0, wins: 0,
-        firstBet: String(b.bet_time ?? ''), lastBet: String(b.bet_time ?? ''),
+        firstBet: bt, lastBet: bt,
       };
       members.set(u, m);
     }
     m.bets++;
     m.betAmount += amt;
     m.winAmount += win;
-    if (isWin) m.wins++;
-    if (b.platform) m.platforms.add(String(b.platform));
-    if (b.lottery) m.lotteries.add(String(b.lottery));
-    const t = String(b.bet_time ?? '');
-    if (t) {
-      if (!m.firstBet || t < m.firstBet) m.firstBet = t;
-      if (!m.lastBet || t > m.lastBet) m.lastBet = t;
+    if (b.isWin) m.wins++;
+    if (b.platform && b.platform !== '-') m.platforms.add(b.platform);
+    if (b.lottery) m.lotteries.add(b.lottery);
+    if (bt) {
+      if (!m.firstBet || bt < m.firstBet) m.firstBet = bt;
+      if (!m.lastBet || bt > m.lastBet) m.lastBet = bt;
     }
-    const ip = String(b.user_ip ?? '').trim();
-    if (ip) {
-      m.ips.add(ip);
-      if (!ipMap.has(ip)) ipMap.set(ip, new Set());
-      ipMap.get(ip)!.add(u);
+    if (b.ip) {
+      m.ips.add(b.ip);
+      if (!ipMap.has(b.ip)) ipMap.set(b.ip, new Set());
+      ipMap.get(b.ip)!.add(u);
     }
   }
 
@@ -238,11 +355,21 @@ export async function GET(req: Request) {
     summary: {
       // records 是「實際計入統計」的筆數；有做時段篩選時會小於源頭回傳的總筆數
       records: counted,
-      recordsFromSource: r.rows.length,
+      recordsFromSource: rows.length,
       shift: shiftFilter || null,
       excludedByShift,
-      truncated: r.truncated,
-      bytes: r.bytes,
+      truncated,
+      bytes,
+      // 這批資料是從哪支引擎來的：C = query-bet-orders（有分頁、欄位多）、v1 = 舊 member-bets
+      engine: sourceEngine,
+      pages,
+      capMessage: capMessage || null,
+      // C 引擎才有 real_earn；有的話一併回報，可與 housePnl 交叉核對
+      realEarnSum: realEarnRows ? realEarnSum : null,
+      realEarnRows,
+      // 撤單筆數與其投注額（已含在上面的 betAmount 裡，源頭就是這樣算的）
+      cancelled,
+      cancelledAmount,
       memberCount: members.size,
       ipCount: ipMap.size,
       betAmount,

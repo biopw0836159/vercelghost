@@ -10,8 +10,12 @@ Railway → New Project → Deploy from GitHub repo → 选 `biopw0836159/vercel
 
 - builder：NIXPACKS（会自动认出 Next.js，跑 `npm ci` → `npm run build`）
 - 启动指令：`npm run start`
-- healthcheck：`/`（登入页，不需登入就会回 200）
+- healthcheck：`/api/health`
 - 失败自动重启，最多 10 次
+
+> healthcheck **不能**打 `/`。加了 IP 白名单之后 `/` 一律回 403，而 healthcheck
+> 由 Railway 内部发起、来源 IP 不在白名单，会被判定为不健康而陷入重启循环。
+> 所以另外开了 `/api/health`，并在 `proxy.ts` 的 matcher 里排除它。
 
 Node 版本靠 `package.json` 的 `engines` 锁在 `>=20.9.0`（Next 16 的下限）。
 

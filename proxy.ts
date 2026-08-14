@@ -99,7 +99,9 @@ export function proxy(req: NextRequest) {
 }
 
 export const config = {
-  // 全站攔截，含 API。排除 _next 內部資源與 favicon，
-  // 那些沒有敏感內容，且被擋掉會讓 403 頁面本身變得難看。
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  // 全站攔截，含 API。三類例外：
+  //   _next/static、_next/image、favicon.ico —— 沒有敏感內容，擋掉只會讓 403 頁面變難看
+  //   api/health —— Railway healthcheck 由容器內部發起，來源 IP 不在白名單，
+  //                 被擋成 403 會被判定不健康而重啟循環
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health).*)'],
 };

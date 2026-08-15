@@ -105,6 +105,10 @@ Railway 的对外 IP 不固定，所以不能靠把 IP 加白名单解决，**�
 
 ## 三之二、Railway 重新部署的坑
 
+**push 到 GitHub 不会自动部署。** 这个服务没有接 GitHub 自动部署，`git push` 之后
+线上还是旧版，得手动触发。2026-08-15 又踩一次：push 完等了十分钟才发现根本没有新部署
+被建立。判断方式是直接问 Railway 有没有该 commit 的部署，不要靠「线上功能有没有出现」去猜。
+
 `serviceInstanceDeployV2` 触发重部署时，用的是**服务当前记录的 commit，不会自动拉最新**。
 上线当天就踩到：修好 healthcheck 后 push，但重部署仍在跑旧 commit，连失败两次。
 

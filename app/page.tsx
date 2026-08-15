@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 
 // 存取控制改用 IP 白名單，擋在專案根目錄的 proxy.ts，這裡不再有帳密登入。
 // A 引擎 → /api/lottery-stats，B 引擎 → /api/member-bets（皆為同源代理，見 app/api/*）
@@ -59,7 +59,13 @@ export default function AuditDashboard() {
   const [mergeByLottery, setMergeByLottery] = useState(false);
   const [dateStart, setDateStart] = useState(fmt(fiveDaysAgo));
   const [dateEnd, setDateEnd] = useState(fmt(today));
-  const [platform, setPlatform] = useState('ALL');
+  // 平台改成勾選式。清單不寫死（平台會增減），從當期實際有資料的平台動態取。
+  // selectedPlatforms 為空 = 全部（送出時給 ALL）。
+  const [platformList, setPlatformList] = useState<{ series: string; platforms: string[] }[]>([]);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const [platformLoading, setPlatformLoading] = useState(false);
+  const [platformErr, setPlatformErr] = useState('');
+  const platform = selectedPlatforms.length ? selectedPlatforms.join(',') : 'ALL';
 
   const [rawData, setRawData] = useState<any[]>([]);
   const [rawCount, setRawCount] = useState(0);
@@ -341,6 +347,33 @@ export default function AuditDashboard() {
     }
   };
 
+  // 日期一變就重抓平台清單（不同日期有資料的平台可能不同），並把已不存在的選擇清掉
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setPlatformLoading(true);
+      setPlatformErr('');
+      try {
+        const res = await fetch(`/api/platforms?dateStart=${dateStart}&dateEnd=${dateEnd}`, { headers: { Accept: 'application/json' } });
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok || json?.error) throw new Error(json?.error || `連線異常 (${res.status})`);
+        setPlatformList(json.grouped ?? []);
+        const valid: string[] = json.platforms ?? [];
+        setSelectedPlatforms(prev => prev.filter(p => valid.includes(p)));
+      } catch (e: any) {
+        if (!cancelled) setPlatformErr(e.message);
+      } finally {
+        if (!cancelled) setPlatformLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dateStart, dateEnd]);
+
+  const togglePlatform = (p: string) => {
+    setSelectedPlatforms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
+  };
+
   const toggleCheck = (id: string) => {
     const newChecked = new Set(checkedItems);
     if (newChecked.has(id)) newChecked.delete(id);
@@ -386,8 +419,48 @@ export default function AuditDashboard() {
               )}
             </div>
           )}
-          <label className="block text-sm font-medium mb-1">平台 (或 ALL)</label>
-          <input type="text" value={platform} onChange={e => setPlatform(e.target.value)} placeholder="ALL" className="w-full border p-1 rounded mb-2 text-black" />
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium">
+                平台
+                <span className="ml-1 text-xs font-normal text-gray-500">
+                  {selectedPlatforms.length ? `已選 ${selectedPlatforms.length} 個` : '未選 = 全部'}
+                </span>
+              </label>
+              <div className="flex gap-1">
+                <button type="button" onClick={() => setSelectedPlatforms(platformList.flatMap(g => g.platforms))}
+                  className="text-xs px-2 py-0.5 border rounded bg-white hover:bg-gray-100">全選</button>
+                <button type="button" onClick={() => setSelectedPlatforms([])}
+                  className="text-xs px-2 py-0.5 border rounded bg-white hover:bg-gray-100">清除</button>
+              </div>
+            </div>
+
+            {platformLoading && <div className="text-xs text-gray-500">讀取平台清單…</div>}
+            {platformErr && <div className="text-xs text-red-600">平台清單讀取失敗：{platformErr}</div>}
+
+            {platformList.map(g => (
+              <div key={g.series} className="mb-1.5">
+                <div className="text-xs text-gray-500 mb-0.5">{g.series} 系列</div>
+                <div className="flex flex-wrap gap-1">
+                  {g.platforms.map(p => {
+                    const on = selectedPlatforms.includes(p);
+                    return (
+                      <button key={p} type="button" onClick={() => togglePlatform(p)}
+                        className={`px-2 py-1 text-xs rounded border transition-colors ${
+                          on ? 'bg-blue-600 text-white border-blue-600 font-bold' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                        }`}>
+                        {p}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+
+            <div className="text-xs text-gray-500 mt-1 leading-relaxed">
+              清單依所選日期實際有資料的平台產生，不是寫死的 —— 新平台上線會自動出現。
+            </div>
+          </div>
           <label className="block text-sm font-medium mb-1">Date Start</label>
           <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} className="w-full border p-1 rounded mb-2 text-black" />
           <label className="block text-sm font-medium mb-1">Date End</label>

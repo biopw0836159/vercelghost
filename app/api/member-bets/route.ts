@@ -47,10 +47,9 @@ const SHIFT_TZ_OFFSET_HOURS = Number(process.env.SHIFT_TZ_OFFSET_HOURS ?? 0);
 // C 引擎的 platforms 必填。清單不寫死 —— 平台會增減（TD 就是 2026-08 才加的），
 // 寫死會在新平台上線時靜默少算。改從 lottery-stats 當期實際有資料的平台推導。
 async function resolvePlatforms(explicit: string, dateStart: string, dateEnd: string): Promise<string[] | null> {
-  if (explicit) {
-    const list = explicit.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-    if (list.length) return list;
-  }
+  // 'ALL' 不能直接往下傳 —— C 引擎與新進會員都不吃 ALL（會回 0 筆），要展開成實際清單
+  const explicitList = explicit.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  if (explicitList.length && !explicitList.includes('ALL')) return explicitList;
   const key = `platforms|${dateStart}|${dateEnd}`;
   const cached = cacheGet<string[]>(key);
   if (cached) return cached;

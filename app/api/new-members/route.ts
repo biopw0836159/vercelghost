@@ -28,10 +28,9 @@ const num = (v: unknown): number => {
 
 // 平台清單不寫死（會增減），從當期實際有資料的平台推導
 async function resolvePlatforms(explicit: string, dateStart: string, dateEnd: string): Promise<string[] | null> {
-  if (explicit) {
-    const list = explicit.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-    if (list.length) return list;
-  }
+  // 'ALL' 不能直接往下傳 —— 這支後端不吃 ALL（會回 0 筆），要展開成實際清單
+  const explicitList = explicit.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  if (explicitList.length && !explicitList.includes('ALL')) return explicitList;
   const key = `platforms|${dateStart}|${dateEnd}`;
   const cached = cacheGet<string[]>(key);
   if (cached) return cached;

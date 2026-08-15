@@ -14,8 +14,10 @@ const parseNum = (v: any): number => {
   return isNaN(n) ? 0 : n;
 };
 
-// 金額顯示：千分位 + 固定兩位小數（後端浮點尾數如 13685.289999999999 直接印出來很難讀）
-const fmtMoney = (v: number) => (Number.isFinite(v) ? v : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// 金額顯示：千分位 + 三位小數，刻意對齊後台「彩種統計」頁的顯示格式，
+// 對帳時可以直接逐位比對，不用心算四捨五入。
+// （直接印原始值會出現 13685.289999999999 這種浮點尾巴，很難讀。）
+const fmtMoney = (v: number) => (Number.isFinite(v) ? v : 0).toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 // RTP 顯示到小數第 4 位（後端只給 3 位，我們自己算的精度更高）
 const fmtRtp = (v: number) => (Number.isFinite(v) ? v : 0).toFixed(4);
 

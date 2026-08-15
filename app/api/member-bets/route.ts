@@ -16,7 +16,7 @@
 // Query：username / lottery / cycleValue 至少給一個，加上 dateStart、dateEnd（yyyy-MM-dd）
 //        platform（選填，指定可省一次平台清單查詢）、shift（早/中/晚，選填）
 import { NextResponse } from 'next/server';
-import { fetchOpenApi } from '@/lib/open-api';
+import { resolvePlatforms } from '@/lib/platforms';
 import { streamBetOrders } from '@/lib/engines';
 import { isDatacenterIp } from '@/lib/ip-class';
 import { cacheGet, cacheSet, ttlFor } from '@/lib/cache';
@@ -46,23 +46,8 @@ const SHIFT_TZ_OFFSET_HOURS = Number(process.env.SHIFT_TZ_OFFSET_HOURS ?? 0);
 
 // C 引擎的 platforms 必填。清單不寫死 —— 平台會增減（TD 就是 2026-08 才加的），
 // 寫死會在新平台上線時靜默少算。改從 lottery-stats 當期實際有資料的平台推導。
-async function resolvePlatforms(explicit: string, dateStart: string, dateEnd: string): Promise<string[] | null> {
-  // 'ALL' 不能直接往下傳 —— C 引擎與新進會員都不吃 ALL（會回 0 筆），要展開成實際清單
-  const explicitList = explicit.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  if (explicitList.length && !explicitList.includes('ALL')) return explicitList;
-  const key = `platforms|${dateStart}|${dateEnd}`;
-  const cached = cacheGet<string[]>(key);
-  if (cached) return cached;
-
-  const r = await fetchOpenApi('/api/open/lottery-stats', { platform: 'ALL', dateStart, dateEnd });
-  if (!r.ok) return null;
-  const list = [...new Set(
-    r.rows.map((x: Record<string, unknown>) => String(x['平台'] ?? x['platform'] ?? '').trim()).filter(Boolean),
-  )];
-  if (!list.length) return null;
-  cacheSet(key, list, ttlFor(dateEnd));
-  return list;
-}
+// 平台清單的解析收斂在 lib/platforms.ts —— 之前這裡自己抓一份、new-members 又抓一份，
+// 三處各自快取，結果是同一個「漏平台」bug 修一處漏兩處。
 
 // 兩個引擎欄位名不同，先正規化成同一種形狀再進彙總，下游邏輯不用各寫一套
 type Bet = {

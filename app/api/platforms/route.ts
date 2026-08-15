@@ -8,22 +8,21 @@
 //
 // Query：dateStart、dateEnd（yyyy-MM-dd）
 import { NextResponse } from 'next/server';
-import { fetchOpenApi } from '@/lib/open-api';
-import { cacheGet, cacheSet } from '@/lib/cache';
+import { getPlatformList } from '@/lib/platforms';
 
 export const runtime = 'nodejs';
 
-// 平台清單刻意只快取 3 分鐘，不跟著「歷史日期已定型」給 30 分鐘。
-// 原因：2026-08-15 實測踩到 —— 後端某次回應少了 LS 平台（直接連打三次都是 18 個，
-// 只有那一次是 17 個），結果被快取 30 分鐘，期間使用者看不到 LS 的勾選按鈕、
-// 查詢就會靜默漏掉那個平台。這是結構性資料，錯一次的代價是漏算整個平台，
-// 所以寧可多打幾次後端，也要讓異常在幾分鐘內自癒。
-const PLATFORM_TTL_MS = 3 * 60 * 1000;
-
+// 系統分組（爬蟲登入邏輯的依據），只影響畫面上怎麼分堆，不影響會查到哪些平台。
+// 清單本身是動態的 —— 新平台一有資料就會自動出現，這張表沒更新也只是歸到「其他」。
+// 新增平台時把代號加進來即可，順手在後面註記市場（阿森／威廉／事務）方便對照。
 const SERIES: Record<string, string> = {
+  // DY 系統
   XH: 'DY', LS: 'DY', OL: 'DY', XY: 'DY',
+  // KR 系統
   SH: 'KR', YS: 'KR', JY: 'KR', HS: 'KR', FB: 'KR', SY: 'KR', LY: 'KR',
   MT: 'KR', JD: 'KR', ND: 'KR', YD: 'KR', RF: 'KR', TD: 'KR',
+  DS: 'KR',   // 鼎上，威廉市場，2026-08 上線
+  // LJ 系統
   XO: 'LJ',
 };
 const SERIES_ORDER = ['DY', 'KR', 'LJ', '其他'];
@@ -37,23 +36,22 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: '必須提供 dateStart 與 dateEnd' }, { status: 400 });
   }
 
-  const key = `platform-list|${dateStart}|${dateEnd}`;
-  const cached = cacheGet<unknown>(key);
-  if (cached) return NextResponse.json(cached, { headers: { 'x-cache': 'HIT' } });
+  const list = await getPlatformList(dateStart, dateEnd);
+  if (!list) return NextResponse.json({ error: '取不到平台清單' }, { status: 502 });
 
-  const r = await fetchOpenApi('/api/open/lottery-stats', { platform: 'ALL', dateStart, dateEnd });
-  if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
-
-  const codes = [...new Set(
-    r.rows.map((x: Record<string, unknown>) => String(x['平台'] ?? x['platform'] ?? '').trim()).filter(Boolean),
-  )].sort();
-
+  const { codes, sources, externalSourceOk } = list;
   const grouped = SERIES_ORDER.map(series => ({
     series,
     platforms: codes.filter(c => (SERIES[c] ?? '其他') === series),
   })).filter(g => g.platforms.length > 0);
 
-  const payload = { platforms: codes, count: codes.length, grouped, dateStart, dateEnd };
-  cacheSet(key, payload, PLATFORM_TTL_MS);
-  return NextResponse.json(payload, { headers: { 'x-cache': 'MISS' } });
+  return NextResponse.json({
+    platforms: codes,
+    count: codes.length,
+    grouped,
+    sources,
+    externalSourceOk,
+    dateStart,
+    dateEnd,
+  });
 }

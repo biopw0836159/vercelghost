@@ -62,6 +62,9 @@ export default function AuditDashboard() {
   // 平台改成勾選式。清單不寫死（平台會增減），從當期實際有資料的平台動態取。
   // selectedPlatforms 為空 = 全部（送出時給 ALL）。
   const [platformList, setPlatformList] = useState<{ series: string; platforms: string[] }[]>([]);
+  // 各平台在「彩票 / 外接」哪一邊有資料 —— 剛上線的平台常常只有一邊
+  const [platformSources, setPlatformSources] = useState<Record<string, string[]>>({});
+  const [externalSourceOk, setExternalSourceOk] = useState(true);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [platformLoading, setPlatformLoading] = useState(false);
   const [platformErr, setPlatformErr] = useState('');
@@ -359,6 +362,8 @@ export default function AuditDashboard() {
         if (cancelled) return;
         if (!res.ok || json?.error) throw new Error(json?.error || `連線異常 (${res.status})`);
         setPlatformList(json.grouped ?? []);
+        setPlatformSources(json.sources ?? {});
+        setExternalSourceOk(json.externalSourceOk !== false);
         const valid: string[] = json.platforms ?? [];
         setSelectedPlatforms(prev => prev.filter(p => valid.includes(p)));
       } catch (e: any) {
@@ -444,12 +449,22 @@ export default function AuditDashboard() {
                 <div className="flex flex-wrap gap-1">
                   {g.platforms.map(p => {
                     const on = selectedPlatforms.includes(p);
+                    // 剛上線的平台常常只有一邊有流水。標出來，免得使用者切到彩票查到 0 筆
+                    // 就以為壞了 —— 那是這平台目前真的只有外接遊戲。
+                    const src = platformSources[p] ?? [];
+                    const onlyExternal = src.length === 1 && src[0] === '外接';
+                    const onlyLottery = src.length === 1 && src[0] === '彩票';
                     return (
                       <button key={p} type="button" onClick={() => togglePlatform(p)}
-                        className={`px-2 py-1 text-xs rounded border transition-colors ${
-                          on ? 'bg-blue-600 text-white border-blue-600 font-bold' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                        title={src.length ? `目前有資料的：${src.join(' + ')}` : undefined}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${
+                          on ? 'bg-blue-600 text-white border border-blue-600 font-bold'
+                             : 'bg-white text-gray-700 hover:bg-gray-100 ' +
+                               (onlyExternal || onlyLottery ? 'border border-dashed border-amber-500' : 'border border-gray-300')
                         }`}>
                         {p}
+                        {onlyExternal && <span className={`ml-0.5 ${on ? 'text-blue-100' : 'text-amber-600'}`}>·外</span>}
+                        {onlyLottery && <span className={`ml-0.5 ${on ? 'text-blue-100' : 'text-amber-600'}`}>·彩</span>}
                       </button>
                     );
                   })}
@@ -459,9 +474,16 @@ export default function AuditDashboard() {
 
             <div className="text-xs text-gray-500 mt-1 leading-relaxed">
               清單依所選日期實際有資料的平台產生（本次 {platformList.reduce((n, g) => n + g.platforms.length, 0)} 個），
-              不是寫死的 —— 新平台上線會自動出現。
+              不是寫死的 —— <b className="text-gray-700">新平台上線只要後台發出資料就會自動出現</b>，不必改設定。
+              標 <span className="text-amber-600">·外</span> / <span className="text-amber-600">·彩</span> 的平台目前只有單邊有流水
+              （常見於剛上線），另一邊查到 0 筆是正常的。
               <b className="text-gray-700">數量若比平常少，代表後端該次回應不完整</b>，
               重新整理再看一次（清單只快取 3 分鐘）。
+              {!externalSourceOk && (
+                <b className="block text-red-600 mt-0.5">
+                  ⚠️ 外接來源這次沒取到，清單可能少了「只有外接遊戲」的平台，請重新整理。
+                </b>
+              )}
             </div>
           </div>
           <label className="block text-sm font-medium mb-1">Date Start</label>

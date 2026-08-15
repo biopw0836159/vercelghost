@@ -10,7 +10,7 @@
 //        dateStart、dateEnd（yyyy-MM-dd，業務日 03:00 切點）
 //        minGroup（選填，幾個帳號以上才算一組，預設 2）
 import { NextResponse } from 'next/server';
-import { fetchOpenApi } from '@/lib/open-api';
+import { resolvePlatforms } from '@/lib/platforms';
 import { fetchNewMembers } from '@/lib/engines';
 import { isDatacenterIp } from '@/lib/ip-class';
 import { cacheGet, cacheSet, ttlFor } from '@/lib/cache';
@@ -27,23 +27,7 @@ const num = (v: unknown): number => {
 };
 
 // 平台清單不寫死（會增減），從當期實際有資料的平台推導
-async function resolvePlatforms(explicit: string, dateStart: string, dateEnd: string): Promise<string[] | null> {
-  // 'ALL' 不能直接往下傳 —— 這支後端不吃 ALL（會回 0 筆），要展開成實際清單
-  const explicitList = explicit.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  if (explicitList.length && !explicitList.includes('ALL')) return explicitList;
-  const key = `platforms|${dateStart}|${dateEnd}`;
-  const cached = cacheGet<string[]>(key);
-  if (cached) return cached;
-
-  const r = await fetchOpenApi('/api/open/lottery-stats', { platform: 'ALL', dateStart, dateEnd });
-  if (!r.ok) return null;
-  const list = [...new Set(
-    r.rows.map((x: Record<string, unknown>) => str(x['平台'] ?? x['platform'])).filter(Boolean),
-  )];
-  if (!list.length) return null;
-  cacheSet(key, list, ttlFor(dateEnd));
-  return list;
-}
+// 平台清單的解析收斂在 lib/platforms.ts，見那裡的註解。
 
 /** 把記錄按某個欄位分組，只留成員數達門檻的組 */
 function groupBy<T extends { platform: string; account: string }>(

@@ -50,6 +50,9 @@ export default function AuditDashboard() {
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
 
   const [activeEngine, setActiveEngine] = useState<'A' | 'B' | 'C'>('A');
+  // A 引擎的資料種類：彩票（lottery-stats）或外接遊戲（external-game-stats），
+  // 對應後台「彩種統計」與「外接統計」兩個選單。兩者欄位不同，不能混算。
+  const [gameKind, setGameKind] = useState<'lottery' | 'external'>('lottery');
   // C 引擎（新進會員）：抓批量創號的特徵 —— 同上級 / 同獎金號 / 同註冊碼 / 同首充 / 同 IP / 創號密集
   const [nmMinGroup, setNmMinGroup] = useState('2');
   const [nmResult, setNmResult] = useState<any>(null);
@@ -197,7 +200,9 @@ export default function AuditDashboard() {
       // 金額與本端點差 4000 倍以上，詳見 docs/API-現狀.md 第三節。
       if (activeEngine === 'A') {
         const qs = new URLSearchParams({ platform, dateStart, dateEnd }).toString();
-        const res = await fetch(`/api/lottery-stats?${qs}`, { headers: { Accept: 'application/json' } });
+        // 外接遊戲是另一支端點、另一套欄位，不能跟彩票混在一起算
+        const endpoint = gameKind === 'external' ? '/api/external-stats' : '/api/lottery-stats';
+        const res = await fetch(`${endpoint}?${qs}`, { headers: { Accept: 'application/json' } });
         const json = await res.json();
         if (!res.ok || json?.error) {
           throw new Error(json?.error || `連線異常 (${res.status})`);
@@ -364,6 +369,23 @@ export default function AuditDashboard() {
 
         <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">⚙️ 審計維度勾選</h3>
         <div className="mb-4 p-3 bg-white rounded shadow-sm border border-gray-200">
+          {activeEngine === 'A' && (
+            <div className="mb-3">
+              <label className="block text-sm font-medium mb-1">遊戲類型</label>
+              <select value={gameKind} onChange={e => setGameKind(e.target.value as 'lottery' | 'external')}
+                className="w-full border p-1.5 rounded text-black bg-white">
+                <option value="lottery">彩票（對應後台「彩種統計」）</option>
+                <option value="external">外接遊戲（對應後台「外接統計」）</option>
+              </select>
+              {gameKind === 'external' && (
+                <div className="mt-1 text-xs text-gray-600 leading-relaxed">
+                  外接是棋牌 / 電子 / 真人，跟彩票是兩套資料。
+                  <b>人數欄位不完整</b>（後端有近八成的遊戲回 0 人），別拿來算人均；
+                  盈虧一律採用後端給的值（後端對不同遊戲的算法不一致）。
+                </div>
+              )}
+            </div>
+          )}
           <label className="block text-sm font-medium mb-1">平台 (或 ALL)</label>
           <input type="text" value={platform} onChange={e => setPlatform(e.target.value)} placeholder="ALL" className="w-full border p-1 rounded mb-2 text-black" />
           <label className="block text-sm font-medium mb-1">Date Start</label>
@@ -511,7 +533,9 @@ export default function AuditDashboard() {
 
       <div className="flex-1 p-8 overflow-y-auto bg-gray-50 relative">
         <div className="bg-slate-800 text-white rounded-lg p-6 mb-6 text-center text-3xl font-bold shadow-lg">
-          📊 {activeEngine === 'A' ? '彩種統計查詢' : activeEngine === 'B' ? '會員注單深查' : '新進會員'}
+          📊 {activeEngine === 'A'
+            ? (gameKind === 'external' ? '外接遊戲統計' : '彩種統計查詢')
+            : activeEngine === 'B' ? '會員注單深查' : '新進會員'}
         </div>
 
         {hasQueried && !loading && (
@@ -867,8 +891,10 @@ export default function AuditDashboard() {
                 <th className="p-4 font-bold text-gray-600">核查</th>
                 {activeEngine === 'A' && <>
                   <th className="p-4 font-bold text-gray-600">平台</th>
-                  <th className="p-4 font-bold text-gray-600">彩種</th>
-                  <th className="p-4 font-bold text-gray-600">人數</th>
+                  <th className="p-4 font-bold text-gray-600">{gameKind === 'external' ? '遊戲' : '彩種'}</th>
+                  <th className="p-4 font-bold text-gray-600">
+                    人數{gameKind === 'external' && <span className="font-normal text-gray-400 text-xs"> (多數為 0)</span>}
+                  </th>
                   <th className="p-4 font-bold text-gray-600">投注筆數</th>
                 </>}
                 {activeEngine === 'B' && <>

@@ -141,11 +141,18 @@ export async function streamBetOrders(
     dateStart: string;
     dateEnd: string;
     username?: string;
+    // 後端支援的過濾參數（2026-08-15 從官方 API 文件查到，先前盲測時沒發現）：
+    //   lotteries  彩種過濾，吃的是「彩種統計那套名稱」（帶編號的 排列五(15)），
+    //              不是注單明細裡顯示的名稱（排列三五）—— 傳錯會回 0 筆
+    //   cycleValue 期號精確匹配
+    // 用這兩個交給後端過濾，比拉全量回來自己篩快好幾百倍（實測 8 分鐘 → 0.7 秒）
+    lotteries?: string[];
+    cycleValue?: string;
     maxPages?: number;
   },
   onBatch: (rows: BetOrder[], progress: { pages: number; records: number }) => void,
 ): Promise<StreamResult> {
-  const { platforms, dateStart, dateEnd, username, maxPages = 2000 } = params;
+  const { platforms, dateStart, dateEnd, username, lotteries, cycleValue, maxPages = 2000 } = params;
 
   let cursor: unknown = null;
   let pages = 0;
@@ -163,6 +170,8 @@ export async function streamBetOrders(
   for (;;) {
     const body: Record<string, unknown> = { platforms, dateStart, dateEnd, limit: 5000 };
     if (username) body.username = username;
+    if (lotteries?.length) body.lotteries = lotteries;
+    if (cycleValue) body.cycleValue = cycleValue;
     if (cursor) body.cursor = cursor;
 
     let r = await postEngine('/api/query-bet-orders', body, 80 * 1024 * 1024);

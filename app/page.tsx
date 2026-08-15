@@ -408,13 +408,11 @@ export default function AuditDashboard() {
             <DeepInput label="期號" hint="例如 202608130360" value={deepCycle} onChange={setDeepCycle} />
             <div className="text-xs text-gray-500 px-1 leading-relaxed mb-4">
               全部走 C 引擎，翻頁翻到底、不設資料量上限，數字不會被截斷。
+              帳號、彩種、期號都交給後端過濾，通常 1 秒內。
               <br />
-              <b className="text-gray-700">查會員帳號很快</b>（後端直接依帳號撈，通常 1 秒內）。
-              <br />
-              <b className="text-orange-700">查彩種或期號會很慢</b> —— C 引擎沒有這兩個參數，
-              只能把該期間的注單全部拉回來再本地精確比對。實測查一天單一平台約需
-              <b> 9 分鐘</b>（翻 125 頁、62 萬筆）。好處是不會串到別的彩種、也沒有 1 萬筆上限，
-              數字完整。<b className="text-gray-700">建議先指定平台縮小範圍</b>，同樣條件再查會直接命中快取。
+              <b className="text-gray-700">彩種名要用「彩種統計查詢」表格裡的寫法</b>
+              （例如 <code>排列五(15)</code> 這種帶編號的），直接複製過來即可；
+              注單裡顯示的名稱（如 <code>排列三五</code>）後端不認、會回 0 筆。
             </div>
             <DeepInput label="平台（選填，可用逗號分隔）" hint="例如 HS 或 HS,XO；留空 = 全部平台" value={deepPlatform} onChange={setDeepPlatform} />
 
@@ -529,13 +527,12 @@ export default function AuditDashboard() {
                   </div>
                 )}
                 {deepResult.summary.lotteryWarning && (
-                  <div className="mt-2 p-2 bg-red-100 border border-red-400 rounded text-red-700">
-                    <b>⚠️ 彩種對不上，這批數字不能當成「{deepResult.summary.lotteryWarning.queried}」的數字用。</b>
+                  <div className="mt-2 p-2 bg-amber-50 border border-amber-400 rounded text-amber-900">
+                    <b>查「{deepResult.summary.lotteryWarning.queried}」沒有任何注單。</b>
                     <div className="mt-1 font-normal">
-                      你查的是「{deepResult.summary.lotteryWarning.queried}」，後端實際回的是
-                      「{deepResult.summary.lotteryWarning.actual.join('」、「') || '（空）'}」。
-                      後端的 lottery 參數會把帶編號的名稱映射到別的彩種，而且彩種統計與注單明細之間還有簡繁字差異。
-                      要準確的數字請<b>改查會員帳號</b>。
+                      多半是彩種名寫法不同。請<b>直接複製 A 引擎（彩種統計查詢）表格裡的彩種名</b>，
+                      例如 <code>排列五(15)</code> 這種帶編號的寫法 —— 後端認的是那一套，
+                      注單裡顯示的名稱（如 <code>排列三五</code>）反而查不到。
                     </div>
                   </div>
                 )}

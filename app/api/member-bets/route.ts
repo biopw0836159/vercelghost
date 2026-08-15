@@ -201,9 +201,6 @@ export async function GET(req: Request) {
   // 一筆注單的處理：串流過來就地算完，不留原始行
   const consume = (b: Bet) => {
     if (b.lottery) seenLotteries.set(b.lottery, (seenLotteries.get(b.lottery) ?? 0) + 1);
-    // 彩種 / 期號用字串完全相等比對，不做模糊匹配 —— 舊端點就是因為模糊映射才會串號
-    if (lottery && b.lottery !== lottery) { excludedByTarget++; return; }
-    if (cycleValue && b.cycleValue !== cycleValue) { excludedByTarget++; return; }
 
     // 時段篩選要擺在所有彙總之前 —— 被篩掉的注單不能進任何統計
     const sh = shiftOf(b.betTime);
@@ -312,15 +309,12 @@ export async function GET(req: Request) {
   // ── 彩種比對結果 ──
   // 改成本地字串完全相等比對後就不會再串號了（舊端點是後端做模糊映射才會串）。
   // 但如果一筆都沒對上，多半是名稱寫法不同（簡繁 经/經、帶不帶編號），要講清楚而不是回個空表。
+  // 彩種查不到東西時，多半是名稱寫錯。後端的 lotteries 參數吃的是
+  // 「彩種統計那套名稱」（帶編號的 排列五(15)），不是注單裡顯示的名稱（排列三五），
+  // 傳錯不會報錯、只會安靜回 0 筆，所以要主動講清楚。
   let lotteryWarning: { queried: string; actual: string[] } | null = null;
-  if (lottery && counted === 0 && excludedByTarget > 0) {
-    // 列出這段期間實際存在、名稱最接近的彩種，讓使用者知道該怎麼填
-    const key = lottery.replace(/\(\d+\)\s*$/, '').trim();
-    const near = [...seenLotteries.entries()]
-      .filter(([n]) => n.includes(key) || key.includes(n.replace(/\(\d+\)\s*$/, '').trim()))
-      .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n, c]) => `${n}（${c} 筆）`);
-    const top = [...seenLotteries.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n, c]) => `${n}（${c} 筆）`);
-    lotteryWarning = { queried: lottery, actual: near.length ? near : top };
+  if (lottery && counted === 0) {
+    lotteryWarning = { queried: lottery, actual: [] };
   }
 
   const SHIFT_ORDER: Record<string, number> = { 早: 0, 中: 1, 晚: 2 };
@@ -401,7 +395,12 @@ export async function GET(req: Request) {
         try {
           send({ type: 'progress', pages: 0, records: 0, counted: 0 });
           const st = await streamBetOrders(
-            { platforms: plats, dateStart, dateEnd, username: username || undefined },
+            {
+              platforms: plats, dateStart, dateEnd,
+              username: username || undefined,
+              lotteries: lottery ? [lottery] : undefined,
+              cycleValue: cycleValue || undefined,
+            },
             (batch, p) => {
               for (const raw of batch) consume(normalizeC(raw));
               send({ type: 'progress', pages: p.pages, records: p.records, counted });
@@ -430,7 +429,12 @@ export async function GET(req: Request) {
 
   // ── 一般模式（查會員很快，不需要串流）──
   const stream = await streamBetOrders(
-    { platforms: plats, dateStart, dateEnd, username: username || undefined },
+    {
+      platforms: plats, dateStart, dateEnd,
+      username: username || undefined,
+      lotteries: lottery ? [lottery] : undefined,
+      cycleValue: cycleValue || undefined,
+    },
     (batch) => { for (const raw of batch) consume(normalizeC(raw)); },
   );
   if (!stream.ok) return NextResponse.json({ error: stream.error }, { status: stream.status });

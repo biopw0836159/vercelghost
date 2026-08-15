@@ -6,13 +6,36 @@
 
 | 项目 | 值 |
 |---|---|
-| 网址 | https://zhuagui-web-production.up.railway.app |
-| Railway 专案 / 服务 | `zhuagui` / `zhuagui-web` |
+| 网址 | **https://ghsot-production.up.railway.app** |
+| Railway 专案 / 服务 | `zhuagui` / `ghsot` |
 | 部署来源 | GitHub `biopw0836159/vercelghost` 的 `main` 分支 |
 | 白名单 `ALLOWED_IPS` | `52.192.113.75`（即授权代理的出口 IP） |
+| 登入帐号 | `owlrisk`（密码不写在这里，改密码见下方） |
 
-**进站方式：浏览器必须挂 `52.192.113.75` 那个代理**，直连一定看到 403。
-这是刻意的设定，不是故障 —— 白名单目前只放行代理出口。
+> ⚠️ **网址跟着 Railway 的服务名走**。服务名 2026-08-15 从 `zhuagui-web` 改成 `ghsot`，
+> 旧网址 `zhuagui-web-production.up.railway.app` 立刻变成 404。
+> 以后改服务名要记得同步更新这里与所有书签。
+
+## 进站要过两道
+
+1. **IP 白名单** —— 浏览器必须挂 `52.192.113.75` 那个代理，直连一定看到「存取被拒」。
+   这是刻意的设定，不是故障。
+2. **帐密登入** —— 过了白名单会看到登入页，输入帐密才进得去。
+   session 是 HMAC 签名的 httpOnly cookie，有效 12 小时。
+
+两道都是在 [`proxy.ts`](../proxy.ts) 里做的，顺序是先 IP 后帐密。
+**没设 `AUTH_USERS` / `AUTH_SECRET` 时第二道会自动略过**，只靠 IP 白名单 ——
+这是刻意的，免得设定还没做完就把人锁在门外。
+
+### 改密码 / 加帐号
+
+```bash
+node scripts/gen-user.mjs <帐号> <密码>     # 产生 帐号:salt:hash
+node scripts/gen-user.mjs --secret          # 产生 AUTH_SECRET
+```
+
+把产生的字串贴进 Railway 的 `AUTH_USERS`（多个帐号用逗号分隔）。
+**密码本身不会被存下来**，存的是 scrypt 杂凑。换掉 `AUTH_SECRET` 等于让所有人重新登入。
 
 上线当天实测：直连 403、走代理 200、走代理打 A 引擎拿到 8/13 的 563 笔
 （18 个平台、投注合计 242,523,019.35）。
@@ -51,7 +74,9 @@ Node 版本靠 `package.json` 的 `engines` 锁在 `>=20.9.0`（Next 16 的下�
 | `PROXY_PORT` | 代理连接埠 | 同上 |
 | `PROXY_USER` | 代理帐号 | 同上 |
 | `PROXY_PASS` | 代理密码 | 同上 |
-| `ALLOWED_IPS` | IP 白名单，逗号分隔，支援 CIDR | **整站一律 403** |
+| `ALLOWED_IPS` | IP 白名单，逗号分隔，支援 CIDR（IPv4 / IPv6 皆可） | **整站一律 403** |
+| `AUTH_USERS` | 帐密，格式 `帐号:salt:hash`，多组逗号分隔 | 帐密那道自动略过，只剩 IP 白名单 |
+| `AUTH_SECRET` | 签 session cookie 用的随机字串 | 同上 |
 | `STATS_BACKEND_URL` | 选填，不设预设 `https://stats-crawler.up.railway.app` | — |
 
 `PROXY_HOST/PORT/USER/PASS` 也可以改成设一个完整的 `PROXY=http://user:pass@host:port` 代替。

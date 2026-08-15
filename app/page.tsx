@@ -458,7 +458,10 @@ export default function AuditDashboard() {
             ))}
 
             <div className="text-xs text-gray-500 mt-1 leading-relaxed">
-              清單依所選日期實際有資料的平台產生，不是寫死的 —— 新平台上線會自動出現。
+              清單依所選日期實際有資料的平台產生（本次 {platformList.reduce((n, g) => n + g.platforms.length, 0)} 個），
+              不是寫死的 —— 新平台上線會自動出現。
+              <b className="text-gray-700">數量若比平常少，代表後端該次回應不完整</b>，
+              重新整理再看一次（清單只快取 3 分鐘）。
             </div>
           </div>
           <label className="block text-sm font-medium mb-1">Date Start</label>

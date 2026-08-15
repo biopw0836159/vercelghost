@@ -49,7 +49,10 @@ export default function AuditDashboard() {
   fiveDaysAgo.setDate(today.getDate() - 5);
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
 
-  const [activeEngine, setActiveEngine] = useState<'A' | 'B'>('A');
+  const [activeEngine, setActiveEngine] = useState<'A' | 'B' | 'C'>('A');
+  // C 引擎（新進會員）：抓批量創號的特徵 —— 同上級 / 同獎金號 / 同註冊碼 / 同首充 / 同 IP / 創號密集
+  const [nmMinGroup, setNmMinGroup] = useState('2');
+  const [nmResult, setNmResult] = useState<any>(null);
   const [mergeByLottery, setMergeByLottery] = useState(false);
   const [dateStart, setDateStart] = useState(fmt(fiveDaysAgo));
   const [dateEnd, setDateEnd] = useState(fmt(today));
@@ -185,6 +188,7 @@ export default function AuditDashboard() {
     setDeepProgress(null);
     setEnrichData(null);
     setEnrichNote('');
+    setNmResult(null);
     // 把當下側邊欄的條件「凍結」成套用版本，這之後再勾選也不會影響表格
     setAppliedFiltersA(filtersA);
     try {
@@ -227,6 +231,20 @@ export default function AuditDashboard() {
           };
         });
         setRawData(finalRows);
+        return;
+      }
+
+      // ───── 引擎 C（新進會員）：抓批量創號特徵 ─────
+      if (activeEngine === 'C') {
+        const q = new URLSearchParams({ dateStart, dateEnd, minGroup: nmMinGroup || '2' });
+        if (platform && platform.toUpperCase() !== 'ALL') q.set('platform', platform);
+        const res = await fetch(`/api/new-members?${q.toString()}`, { headers: { Accept: 'application/json' } });
+        const json = await res.json();
+        if (!res.ok || json?.error) throw new Error(json?.error || `連線異常 (${res.status})`);
+        setNmResult(json);
+        setRawCount(json.summary?.records ?? 0);
+        if (json.members?.length) setRawSample(json.members[0]);
+        setRawData([]);
         return;
       }
 
@@ -338,6 +356,10 @@ export default function AuditDashboard() {
             <input type="radio" name="engine" checked={activeEngine === 'B'} onChange={() => setActiveEngine('B')} className="w-4 h-4 text-gray-800" />
             <span className={activeEngine === 'B' ? "font-bold text-black" : "text-gray-600"}>會員注單深查</span>
           </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="engine" checked={activeEngine === 'C'} onChange={() => setActiveEngine('C')} className="w-4 h-4 text-gray-800" />
+            <span className={activeEngine === 'C' ? "font-bold text-black" : "text-gray-600"}>新進會員</span>
+          </label>
         </div>
 
         <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">⚙️ 審計維度勾選</h3>
@@ -381,6 +403,28 @@ export default function AuditDashboard() {
             <FilterInput label="Max盈虧" filterObj={filtersA.maxPnl} stateUpdater={setFiltersA} stateKey="maxPnl" />
             <FilterInput label="Min RTP" filterObj={filtersA.minRtp} stateUpdater={setFiltersA} stateKey="minRtp" />
             <FilterInput label="Max RTP" filterObj={filtersA.maxRtp} stateUpdater={setFiltersA} stateKey="maxRtp" />
+          </div>
+        )}
+
+        {activeEngine === 'C' && (
+          <div>
+            <div className="mb-3 p-2 bg-gray-100 border border-gray-300 rounded text-xs text-gray-700 leading-relaxed">
+              抓批量創號的特徵：把<b>同上級 / 同獎金號 / 同註冊碼 / 同首充金額 / 同 IP</b>
+              的帳號歸在一起，另外標出<b>短時間內密集創號</b>的批次。
+              <br />
+              這裡只陳述「哪些帳號的某個值相同」，<b>不代表就是同一批人</b> ——
+              尤其同 IP，機房出口會讓不相干的人共用，所以機房另外分開標。
+            </div>
+            <div className="mb-3">
+              <label className="block text-sm font-medium mb-1 text-gray-700">幾人以上才算一組</label>
+              <input type="number" min={2} value={nmMinGroup} onChange={e => setNmMinGroup(e.target.value)}
+                className="w-full border p-2 rounded text-black" />
+              <div className="text-xs text-gray-500 mt-1">預設 2。調高可以只看比較大的批次。</div>
+            </div>
+            <div className="text-xs text-gray-500 px-1 leading-relaxed">
+              平台與日期用上面那組。平台留 <code>ALL</code> 會查當期所有有資料的平台，
+              平台多的話會慢一些（後端要逐平台抓）。
+            </div>
           </div>
         )}
 
@@ -467,7 +511,7 @@ export default function AuditDashboard() {
 
       <div className="flex-1 p-8 overflow-y-auto bg-gray-50 relative">
         <div className="bg-slate-800 text-white rounded-lg p-6 mb-6 text-center text-3xl font-bold shadow-lg">
-          📊 {activeEngine === 'A' ? '彩種統計查詢' : '會員注單深查'}
+          📊 {activeEngine === 'A' ? '彩種統計查詢' : activeEngine === 'B' ? '會員注單深查' : '新進會員'}
         </div>
 
         {hasQueried && !loading && (
@@ -597,6 +641,143 @@ export default function AuditDashboard() {
           </div>
         )}
 
+        {/* 新進會員：分組結果 + 明細 */}
+        {activeEngine === 'C' && nmResult && (() => {
+          const s = nmResult.summary;
+          const home = (nmResult.byIp ?? []).filter((x: any) => !x.datacenter);
+          const dc = (nmResult.byIp ?? []).filter((x: any) => x.datacenter);
+          const Group = ({ title, hint, items, valueLabel }: any) => (
+            <div className="bg-white rounded-lg shadow border border-gray-200 p-4 mb-4">
+              <div className="font-bold text-gray-700 mb-1">{title}　<span className="font-normal text-gray-500 text-sm">{items.length} 組</span></div>
+              {hint && <div className="text-xs text-gray-500 mb-2 leading-relaxed">{hint}</div>}
+              {items.length === 0 ? (
+                <div className="text-sm text-gray-500">沒有達到門檻的組。</div>
+              ) : (
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-gray-100 border-b">
+                    <tr>
+                      <th className="p-2 font-bold text-gray-600">{valueLabel}</th>
+                      <th className="p-2 font-bold text-gray-600 w-20">帳號數</th>
+                      <th className="p-2 font-bold text-gray-600">帳號</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.slice(0, 30).map((g: any) => (
+                      <tr key={g.value} className="border-b hover:bg-blue-50">
+                        <td className="p-2 font-mono font-bold text-blue-700 whitespace-nowrap">{g.value}</td>
+                        <td className="p-2 font-bold">{g.count}</td>
+                        <td className="p-2 text-xs text-gray-700 break-all">{g.members.join('、')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {items.length > 30 && <div className="text-xs text-gray-500 mt-2">只顯示前 30 組，共 {items.length} 組。</div>}
+            </div>
+          );
+
+          return (
+            <>
+              <div className="bg-yellow-50 border border-yellow-300 rounded p-3 mb-4 text-sm font-mono">
+                <div>🔸 新進會員 <b>{s.records}</b> 人　平台 <b>{s.platformCount}</b> 個（{s.platforms.join(', ')}）</div>
+                <div>🔸 有首充 <b>{s.withFirstDeposit}</b> 人　有註冊碼 <b>{s.withRegCode}</b> 人　門檻 {s.minGroup} 人成組</div>
+                <div className="text-xs text-gray-600 mt-1">🔸 {s.dateNote}</div>
+                {s.upstreamErrors?.length > 0 && (
+                  <div className="mt-2 p-2 bg-red-100 border border-red-400 rounded text-red-700">
+                    ⚠️ 後端有平台抓取失敗，這批資料不完整：{JSON.stringify(s.upstreamErrors)}
+                  </div>
+                )}
+              </div>
+
+              <Group title="🔗 同上級" valueLabel="平台/上級" items={nmResult.byAgent}
+                hint="同一個上級底下新開的帳號。正常代理也會有，看的是數量與其他特徵是否同時成立。" />
+              <Group title="🎯 同獎金號" valueLabel="平台/獎金號" items={nmResult.byBonusCode}
+                hint="獎金號由上級統一下發，整批一致代表同一條線批量開的。" />
+              <Group title="🔖 同註冊碼" valueLabel="平台/註冊碼" items={nmResult.byRegCode}
+                hint="同一個推廣連結進來的。" />
+              <Group title="💰 同首充金額" valueLabel="首充金額" items={nmResult.byFirstDeposit}
+                hint="批量養號常見首充金額一致。金額小的組參考價值低（很多人剛好充一樣的數）。" />
+
+              <div className="bg-white rounded-lg shadow border border-gray-200 p-4 mb-4">
+                <div className="font-bold text-gray-700 mb-1">🌐 同最後登入 IP　<span className="font-normal text-gray-500 text-sm">住宅 {home.length} 組</span></div>
+                <div className="text-xs text-gray-500 mb-2">機房 / 雲端出口會讓不相干的人共用同一個 IP，所以分開列，不要當成同一批人的證據。</div>
+                {home.length === 0 ? <div className="text-sm text-gray-500">沒有住宅 IP 共用的情況。</div> : home.map((g: any) => (
+                  <div key={g.value} className="text-sm mb-1">
+                    <span className="font-mono font-bold text-red-600">{g.value}</span>
+                    <span className="text-gray-500"> — {g.count} 個帳號：</span>
+                    <span className="text-blue-700">{g.members.join('、')}</span>
+                  </div>
+                ))}
+                {dc.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-500">
+                    另有 {dc.length} 個機房 / 雲端出口 IP（{dc.slice(0, 3).map((x: any) => x.value).join('、')}{dc.length > 3 ? ' 等' : ''}）共用帳號，已排除。
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white rounded-lg shadow border border-gray-200 p-4 mb-4">
+                <div className="font-bold text-gray-700 mb-1">⏱ 密集創號　<span className="font-normal text-gray-500 text-sm">{nmResult.timeClusters.length} 批</span></div>
+                <div className="text-xs text-gray-500 mb-2">同平台同上級、30 分鐘內註冊 {s.minGroup} 個以上算一批。</div>
+                {nmResult.timeClusters.length === 0 ? <div className="text-sm text-gray-500">沒有達到門檻的批次。</div> : (
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-gray-100 border-b">
+                      <tr>
+                        <th className="p-2 font-bold text-gray-600">平台</th>
+                        <th className="p-2 font-bold text-gray-600">上級</th>
+                        <th className="p-2 font-bold text-gray-600 w-16">人數</th>
+                        <th className="p-2 font-bold text-gray-600">時間範圍</th>
+                        <th className="p-2 font-bold text-gray-600">帳號</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nmResult.timeClusters.slice(0, 30).map((c: any, i: number) => (
+                        <tr key={i} className="border-b hover:bg-blue-50">
+                          <td className="p-2">{c.platform}</td>
+                          <td className="p-2 font-mono text-blue-700">{c.agent}</td>
+                          <td className="p-2 font-bold">{c.count}</td>
+                          <td className="p-2 text-xs font-mono text-gray-600">{c.from} ~ {c.to.slice(11)}</td>
+                          <td className="p-2 text-xs text-gray-700 break-all">{c.members.join('、')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="bg-white rounded-lg shadow border border-gray-200">
+                <div className="p-4 font-bold text-gray-700 border-b">📋 全部新進會員（{nmResult.members.length} 人）</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm whitespace-nowrap">
+                    <thead className="bg-gray-100 border-b sticky top-0 z-20">
+                      <tr>
+                        {['平台', '帳號', '上級', '獎金號', '註冊時間', '首充金額', '首充管道', '最後登入IP', '來源', '註冊碼'].map(h => (
+                          <th key={h} className="p-3 font-bold text-gray-600">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nmResult.members.map((m: any, i: number) => (
+                        <tr key={`${m.platform}/${m.account}/${i}`} className="border-b hover:bg-blue-50">
+                          <td className="p-3">{m.platform}</td>
+                          <td className="p-3 font-bold text-blue-600">{m.account}</td>
+                          <td className="p-3">{m.agent || '—'}</td>
+                          <td className="p-3 font-mono">{m.bonusCode || '—'}</td>
+                          <td className="p-3 text-xs font-mono text-gray-600">{m.registeredAt}</td>
+                          <td className="p-3">{m.firstDepositAmount > 0 ? fmtMoney(m.firstDepositAmount) : '—'}</td>
+                          <td className="p-3">{m.firstDepositChannel || '—'}</td>
+                          <td className="p-3 text-xs font-mono text-gray-600">{m.lastLoginIp || '—'}</td>
+                          <td className="p-3 text-xs">{m.source || '—'}</td>
+                          <td className="p-3 font-mono text-xs">{m.regCode || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          );
+        })()}
+
         {/* 班別分布 —— 用注單明細的 bet_time 自己切，後端沒有小時粒度的介面 */}
         {activeEngine === 'B' && deepResult?.byShift?.length > 0 && (() => {
           const off = deepResult.summary?.shiftTzOffsetHours ?? 8;
@@ -678,7 +859,8 @@ export default function AuditDashboard() {
           );
         })()}
 
-        <div className="bg-white rounded-lg shadow border border-gray-200">
+        {/* A / B 引擎的主表格；C 引擎有自己的呈現，不走這裡 */}
+        <div className={`bg-white rounded-lg shadow border border-gray-200 ${activeEngine === 'C' ? 'hidden' : ''}`}>
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-gray-100 border-b sticky top-0 z-20 shadow-sm">
               <tr>

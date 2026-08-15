@@ -114,6 +114,41 @@ export async function fetchProfitLoss(
   };
 }
 
+// ── 新進會員 ──
+// POST /api/v1/new-members，回傳 14 個欄位：平台/會員帳號/團隊人數/上級/餘額/
+// 獎金(獎金號)/註冊時間/首充日期/首充金額/首充管道/最後登錄/最後登錄IP/來源/註冊碼
+//
+// 實測限制（2026-08-15）：
+//   · platforms 必須列舉，傳 ['ALL'] 會回 0 筆
+//   · username / filterType / regUrl 這幾個參數實際無效（帶了跟沒帶結果一樣）
+//   · 沒有分頁也沒有筆數上限，一次全回（ALL 平台 13 天實測 1307 筆 / 幾秒）
+//   · 查一天會涵蓋到隔天 —— 業務日 03:00 切點的正常表現，不是 bug
+export type NewMember = Record<string, unknown>;
+export type NewMembersResult =
+  | { ok: true; records: NewMember[]; bytes: number; errors: unknown[] }
+  | { ok: false; status: number; error: string };
+
+export async function fetchNewMembers(params: {
+  platforms: string[];
+  dateStart: string;
+  dateEnd: string;
+}): Promise<NewMembersResult> {
+  const r = await postEngine('/api/v1/new-members', {
+    platforms: params.platforms,
+    dateStart: params.dateStart,
+    dateEnd: params.dateEnd,
+  }, 80 * 1024 * 1024);
+  if (!r.ok) return r;
+
+  const d = r.data as { records?: NewMember[]; data?: NewMember[]; errors?: unknown[] };
+  return {
+    ok: true,
+    records: d.records ?? d.data ?? [],
+    bytes: r.bytes,
+    errors: Array.isArray(d.errors) ? d.errors : [],
+  };
+}
+
 // ── C 引擎：注單明細（cursor 分頁，串流式）──
 export type BetOrder = Record<string, unknown>;
 export type StreamResult =

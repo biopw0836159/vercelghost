@@ -1,7 +1,10 @@
-// IP 白名單 —— 取代原本的帳密登入。
+// 兩道存取控制：IP 白名單（從哪裡來）＋ 帳密登入（你是誰）。
 //
 // Next 16 把 middleware 改名為 proxy，這支檔案要放在專案根目錄（與 app/ 同層）。
 // 預設跑 Node.js runtime，不能設 runtime 設定選項。
+//
+// 順序：先擋 IP，過了才看 session。沒設 AUTH_USERS / AUTH_SECRET 時第二道自動略過，
+// 只靠 IP 白名單 —— 設定還沒完成時不要把人鎖在門外。
 //
 // 設定方式：環境變數 ALLOWED_IPS，逗號分隔，支援單一 IP 與 CIDR，IPv4 / IPv6 皆可，例如
 //   ALLOWED_IPS=203.0.113.5, 198.51.100.0/24, 2001:db8::1, 2400:cb00::/32
@@ -11,6 +14,7 @@
 // 來源 IP，方便把自己加進白名單。
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { verifySession, authConfigured, SESSION_COOKIE } from '@/lib/auth';
 
 // IPv4 / IPv6 都轉成 BigInt 來比對 —— 只支援 IPv4 的話，
 // 哪天出口換成 IPv6（現在很常見）就會把自己擋在門外。
@@ -122,18 +126,43 @@ ${setupHint}
 }
 
 export function proxy(req: NextRequest) {
+  const path = req.nextUrl.pathname;
+
   // 本機 next dev 沒有 x-forwarded-for，不豁免的話自己也進不去。
   // 線上 NODE_ENV 是 production，這條不會生效。
-  if (process.env.NODE_ENV === 'development') return NextResponse.next();
+  const isDev = process.env.NODE_ENV === 'development';
 
-  const raw = process.env.ALLOWED_IPS || '';
-  const rules = raw.split(',').map(s => s.trim()).filter(Boolean);
-  const { ip, xff, xri } = clientIp(req);
+  // ── 第一道：IP 白名單（擋「從哪裡來」）──
+  if (!isDev) {
+    const raw = process.env.ALLOWED_IPS || '';
+    const rules = raw.split(',').map(s => s.trim()).filter(Boolean);
+    const { ip, xff, xri } = clientIp(req);
 
-  if (rules.length === 0) return deny(ip, xff, xri, false);
-  if (!ip) return deny(ip, xff, xri, true);
-  if (rules.some(r => ipMatches(ip, r))) return NextResponse.next();
-  return deny(ip, xff, xri, true);
+    if (rules.length === 0) return deny(ip, xff, xri, false);
+    if (!ip) return deny(ip, xff, xri, true);
+    if (!rules.some(r => ipMatches(ip, r))) return deny(ip, xff, xri, true);
+  }
+
+  // ── 第二道：帳密登入（擋「你是誰」）──
+  // 沒設 AUTH_USERS / AUTH_SECRET 就等於沒開這道，只靠 IP 白名單。
+  // 這是刻意的：設定還沒完成時不要把人鎖在外面，而不是預設就鎖死。
+  if (!authConfigured()) return NextResponse.next();
+
+  // 登入頁與登入 API 本身必須放行，否則沒辦法登入
+  if (path === '/login' || path === '/api/auth/login' || path === '/api/auth/logout') {
+    return NextResponse.next();
+  }
+
+  if (verifySession(req.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();
+
+  // API 回 401 讓前端好處理；頁面則導去登入頁並記住原本要去的地方
+  if (path.startsWith('/api/')) {
+    return NextResponse.json({ error: '尚未登入或登入已過期' }, { status: 401 });
+  }
+  const url = req.nextUrl.clone();
+  url.pathname = '/login';
+  url.search = `?next=${encodeURIComponent(path + req.nextUrl.search)}`;
+  return NextResponse.redirect(url);
 }
 
 export const config = {

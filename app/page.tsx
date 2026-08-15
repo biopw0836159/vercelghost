@@ -484,6 +484,14 @@ export default function AuditDashboard() {
           <button onClick={fetchData} disabled={loading} className="mt-3 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50">
             {loading ? '資料擷取中...' : '執行查詢'}
           </button>
+          <button
+            onClick={async () => {
+              await fetch('/api/auth/logout', { method: 'POST' });
+              window.location.href = '/login';
+            }}
+            className="mt-2 w-full bg-gray-400 text-white py-1 rounded hover:bg-gray-500 text-sm">
+            登出
+          </button>
         </div>
 
         {activeEngine === 'A' && (

@@ -3,8 +3,8 @@
 // Next 16 把 middleware 改名為 proxy，這支檔案要放在專案根目錄（與 app/ 同層）。
 // 預設跑 Node.js runtime，不能設 runtime 設定選項。
 //
-// 設定方式：環境變數 ALLOWED_IPS，逗號分隔，支援單一 IP 與 CIDR，例如
-//   ALLOWED_IPS=203.0.113.5, 198.51.100.0/24
+// 設定方式：環境變數 ALLOWED_IPS，逗號分隔，支援單一 IP 與 CIDR，IPv4 / IPv6 皆可，例如
+//   ALLOWED_IPS=203.0.113.5, 198.51.100.0/24, 2001:db8::1, 2400:cb00::/32
 //
 // 沒設 ALLOWED_IPS 時「一律拒絕」而不是一律放行 —— 這站看得到 18 個平台的
 // 投注、盈虧、會員帳號與 IP，設定沒做完之前絕不能裸奔。被拒頁面會顯示判定到的
@@ -12,33 +12,71 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-function ipToInt(ip: string): number | null {
-  const parts = ip.trim().split('.');
-  if (parts.length !== 4) return null;
-  let n = 0;
-  for (const p of parts) {
-    const v = Number(p);
-    if (!Number.isInteger(v) || v < 0 || v > 255) return null;
-    n = n * 256 + v;
+// IPv4 / IPv6 都轉成 BigInt 來比對 —— 只支援 IPv4 的話，
+// 哪天出口換成 IPv6（現在很常見）就會把自己擋在門外。
+// 回傳 null 代表這串不是合法 IP。bits 是該協定的位址長度（v4=32、v6=128）。
+function ipToBig(ip: string): { value: bigint; bits: 32 | 128 } | null {
+  const s = ip.trim().replace(/^\[|\]$/g, '');
+  if (!s) return null;
+
+  // IPv4-mapped IPv6（::ffff:1.2.3.4）視為 IPv4，否則同一台機器兩種寫法會對不起來
+  const mapped = s.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  const target = mapped ? mapped[1] : s;
+
+  if (target.includes('.') && !target.includes(':')) {
+    const parts = target.split('.');
+    if (parts.length !== 4) return null;
+    let n = 0n;
+    for (const p of parts) {
+      if (!/^\d{1,3}$/.test(p)) return null;
+      const v = Number(p);
+      if (v < 0 || v > 255) return null;
+      n = (n << 8n) | BigInt(v);
+    }
+    return { value: n, bits: 32 };
   }
-  return n >>> 0;
+
+  if (!target.includes(':')) return null;
+  // 展開 :: 縮寫
+  const halves = target.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 ? (halves[1] ? halves[1].split(':') : []) : [];
+  if (halves.length === 1 && head.length !== 8) return null;
+  const fill = 8 - head.length - tail.length;
+  if (fill < 0) return null;
+  const groups = [...head, ...Array(halves.length === 2 ? fill : 0).fill('0'), ...tail];
+  if (groups.length !== 8) return null;
+
+  let n = 0n;
+  for (const g of groups) {
+    if (!/^[0-9a-f]{1,4}$/i.test(g)) return null;
+    n = (n << 16n) | BigInt(parseInt(g, 16));
+  }
+  return { value: n, bits: 128 };
 }
 
-// 支援 "1.2.3.4" 與 "1.2.3.0/24" 兩種寫法
+// 支援 "1.2.3.4"、"1.2.3.0/24"、"2001:db8::1"、"2001:db8::/32"
 function ipMatches(ip: string, rule: string): boolean {
   const r = rule.trim();
   if (!r) return false;
-  const target = ipToInt(ip);
-  if (target === null) return false;
+  const target = ipToBig(ip);
+  if (!target) return false;
 
-  const slash = r.indexOf('/');
-  if (slash === -1) return target === ipToInt(r);
+  const slash = r.lastIndexOf('/');
+  if (slash === -1) {
+    const base = ipToBig(r);
+    return !!base && base.bits === target.bits && base.value === target.value;
+  }
 
-  const base = ipToInt(r.slice(0, slash));
+  const base = ipToBig(r.slice(0, slash));
   const bits = Number(r.slice(slash + 1));
-  if (base === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
-  const mask = bits === 0 ? 0 : (-1 << (32 - bits)) >>> 0;
-  return ((target & mask) >>> 0) === ((base & mask) >>> 0);
+  if (!base || !Number.isInteger(bits) || bits < 0 || bits > base.bits) return false;
+  // 跨協定不比對（IPv4 規則不會意外命中 IPv6 位址）
+  if (base.bits !== target.bits) return false;
+
+  const shift = BigInt(base.bits - bits);
+  return (target.value >> shift) === (base.value >> shift);
 }
 
 // Railway 這類平台會把真實來源放進 x-forwarded-for（可能是 "client, proxy1, proxy2"）。

@@ -7,14 +7,19 @@
 | 项目 | 值 |
 |---|---|
 | 网址 | **https://ghsot-production.up.railway.app** |
-| Railway 专案 / 服务 | `zhuagui` / `ghsot` |
+| Railway 专案 / 服务 | `zhuagui` / `ghost` |
 | 部署来源 | GitHub `biopw0836159/vercelghost` 的 `main` 分支 |
 | 白名单 `ALLOWED_IPS` | `52.192.113.75`（即授权代理的出口 IP） |
 | 登入帐号 | `owlrisk`（密码不写在这里，改密码见下方） |
 
-> ⚠️ **网址跟着 Railway 的服务名走**。服务名 2026-08-15 从 `zhuagui-web` 改成 `ghsot`，
-> 旧网址 `zhuagui-web-production.up.railway.app` 立刻变成 404。
-> 以后改服务名要记得同步更新这里与所有书签。
+> ⚠️ **服务名与网址是两件事，别以为改名就会换网址**（2026-08-17 实测厘清）：
+> 服务名现在叫 `ghost`，网址却仍是 `ghsot-...` —— 网址只在**第一次生成时**取自服务名，
+> 之后改名不会跟着动。所以现在两者对不上是正常的，同事不用换网址。
+>
+> 想真的换网址，得删掉旧 domain 再建新的（`serviceDomainCreate` 会依当下服务名生成）。
+> `serviceDomainUpdate` 传 `domain` **回 true 但完全不生效**，别被它骗了。
+> 另外 Railway 的域名是**全局唯一**：`ghost-production.up.railway.app` 已被别的帐号占用，
+> 重建只会拿到带随机后缀的 `ghost-production-2b8c...`，所以这次决定不换、维持旧网址。
 
 ## 进站要过两道
 

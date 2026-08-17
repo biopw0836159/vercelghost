@@ -127,11 +127,11 @@ Railway 服务的 Settings 里，「Branch connected to production」显示红�
 ⚠️ 副作用要知道：`serviceConnect` 当下会**立刻部署一次当时的最新 commit**
 （public 仓库不需授权即可 clone）。所以跑它等于顺手上线一次，别在不想变更线上时跑。
 
-**唯一的修法只能由仓库拥有者在 GitHub 网页上做**（API 改不了，
-`PUT /user/installations/{id}/repositories/{id}` 需要 user-to-server token）：
-GitHub → Settings → Applications → 左侧 Installed GitHub Apps → Railway → Configure
-→ Repository access 里把 `vercelghost` 勾进去 → Save。
-之后回 Railway 该服务的 Settings，那行红字 `GitHub Repo not found` 会变成正常分支名。
+**⚠️ 上面那个「授权范围没包含本仓库」的推论，2026-08-16 经截图核对是错的**：
+Railway App 的 Repository access 选的是 Only select repositories，四个仓库
+（`vercelghost`、`777444`、`report-hub`、`99999999`）里**本来就有 `vercelghost`**。
+所以 public / private 那个对照只能解释「手动部署为何仍可用」，
+解释不了 webhook 为何没建立 —— 真正原因另有其他，别再照那个方向查。
 
 在那之前，一律用 `serviceInstanceDeployV2` 显式带 commitSha 手动部署。
 

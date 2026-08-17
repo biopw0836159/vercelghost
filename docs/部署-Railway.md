@@ -105,9 +105,23 @@ Railway 的对外 IP 不固定，所以不能靠把 IP 加白名单解决，**�
 
 ## 三之二、Railway 重新部署的坑
 
-**push 到 GitHub 不会自动部署。** 这个服务没有接 GitHub 自动部署，`git push` 之后
-线上还是旧版，得手动触发。2026-08-15 又踩一次：push 完等了十分钟才发现根本没有新部署
-被建立。判断方式是直接问 Railway 有没有该 commit 的部署，不要靠「线上功能有没有出现」去猜。
+**push 到 GitHub 不会自动部署 —— 因为 Railway 与本仓库的连接是断的。**
+Railway 服务的 Settings 里，「Branch connected to production」显示红字
+`GitHub Repo not found`。`git push` 之后线上还是旧版，必须手动触发。
+2026-08-15 踩过：push 完等了十分钟才发现根本没有新部署被建立。
+判断方式是直接问 Railway 有没有该 commit 的部署，不要靠「线上功能有没有出现」去猜。
+
+根因（2026-08-16 查明）：**Railway 的 GitHub App 授权范围里没有本仓库**。
+拿同帐号的 report-hub 对照就清楚了 —— 它是 **private** 仓库却能自动部署，
+说明 App 授权本身是好的、它在授权列表里；本仓库是 **public**，不在列表里。
+于是形成这个组合：
+
+- Railway 不需要授权就能匿名 clone public 仓库 → **手动带 `commitSha` 部署一直成功**
+- 但收 push 事件（webhook）需要授权 → **push 永远不触发部署**，UI 也查不到分支信息
+
+要修：GitHub → Settings → Applications → Railway → Configure →
+把 `vercelghost` 加进 Repository access，再回 Railway 该服务重新连接一次。
+不修也能照旧跑，只是每次都得手动触发。
 
 `serviceInstanceDeployV2` 触发重部署时，用的是**服务当前记录的 commit，不会自动拉最新**。
 上线当天就踩到：修好 healthcheck 后 push，但重部署仍在跑旧 commit，连失败两次。

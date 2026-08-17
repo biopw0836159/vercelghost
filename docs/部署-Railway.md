@@ -119,12 +119,21 @@ Railway 服务的 Settings 里，「Branch connected to production」显示红�
 - Railway 不需要授权就能匿名 clone public 仓库 → **手动带 `commitSha` 部署一直成功**
 - 但收 push 事件（webhook）需要授权 → **push 永远不触发部署**，UI 也查不到分支信息
 
-修复尝试（2026-08-16）：先从 Railway 侧 `serviceConnect` 重新连一次
-（`{repo:'biopw0836159/vercelghost', branch:'main'}`，幂等）。
-**这个 commit 本身就是验证** —— 若它在 push 后自动出现部署，代表连接已恢复；
-若仍需手动触发，代表问题确实在 GitHub App 的授权范围，得到
-GitHub → Settings → Applications → Railway → Configure 把 `vercelghost`
-加进 Repository access 才行（那步只能由仓库拥有者在网页上做）。
+**从 Railway 侧重连解决不了，已实测（2026-08-16）**：
+跑 `serviceConnect({repo:'biopw0836159/vercelghost', branch:'main'})` 回传成功，
+但那只是让 Railway 重新记下 repo。之后 push 一个 commit、观察 4 分钟，
+**没有任何部署被建立** → webhook 依然不存在。
+
+⚠️ 副作用要知道：`serviceConnect` 当下会**立刻部署一次当时的最新 commit**
+（public 仓库不需授权即可 clone）。所以跑它等于顺手上线一次，别在不想变更线上时跑。
+
+**唯一的修法只能由仓库拥有者在 GitHub 网页上做**（API 改不了，
+`PUT /user/installations/{id}/repositories/{id}` 需要 user-to-server token）：
+GitHub → Settings → Applications → 左侧 Installed GitHub Apps → Railway → Configure
+→ Repository access 里把 `vercelghost` 勾进去 → Save。
+之后回 Railway 该服务的 Settings，那行红字 `GitHub Repo not found` 会变成正常分支名。
+
+在那之前，一律用 `serviceInstanceDeployV2` 显式带 commitSha 手动部署。
 
 `serviceInstanceDeployV2` 触发重部署时，用的是**服务当前记录的 commit，不会自动拉最新**。
 上线当天就踩到：修好 healthcheck 后 push，但重部署仍在跑旧 commit，连失败两次。

@@ -127,7 +127,17 @@ Railway 服务的 Settings 里，「Branch connected to production」显示红�
 ⚠️ 副作用要知道：`serviceConnect` 当下会**立刻部署一次当时的最新 commit**
 （public 仓库不需授权即可 clone）。所以跑它等于顺手上线一次，别在不想变更线上时跑。
 
-**⚠️ 上面那个「授权范围没包含本仓库」的推论，2026-08-16 经截图核对是错的**：
+**⚠️⚠️ 2026-08-17 晚间起 GitHub 正在 critical 事故，这期间的任何判断都不算数**：
+`githubstatus` 显示 **Webhooks = partial_outage、API Requests = major_outage**
+（事故 UTC 13:40 起）。push 不触发部署、Railway UI 显示 `GitHub Repo not found`，
+在事故期间**都可能只是 GitHub 挂了**，不代表配置有问题。
+→ 要判断连接到底好没好，**必须等 GitHub 恢复 operational 之后再 push 一次实测**。
+查法：`https://www.githubstatus.com/api/v2/summary.json`。
+
+注意时间线别搞混：2026-08-15 那次「push 完等十分钟没有部署」发生在事故之前，
+所以那次是真问题；而 08-17 晚间的两次复测都在事故期间，结论作废。
+
+**⚠️ 「授权范围没包含本仓库」的推论，2026-08-17 经截图核对是错的**：
 Railway App 的 Repository access 选的是 Only select repositories，四个仓库
 （`vercelghost`、`777444`、`report-hub`、`99999999`）里**本来就有 `vercelghost`**。
 所以 public / private 那个对照只能解释「手动部署为何仍可用」，
